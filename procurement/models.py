@@ -95,6 +95,10 @@ class ProcurementRecord(models.Model):
     def display_cost(self):
         return self.awarded_cost if self.awarded_cost is not None else self.estimated_cost
 
+    # 25% above the department+method median — deliberately simple and
+    # explainable, not a tuned/statistical threshold (see cost_outlier_ratio).
+    COST_OUTLIER_THRESHOLD = 1.25
+
     def cost_outlier_ratio(self):
         """Rule-based cost-outlier signal (build prompt v2 Phase 2 item 2) —
         median awarded cost for same method+department, not ML. Returns None
@@ -112,6 +116,10 @@ class ProcurementRecord(models.Model):
         if not median:
             return None
         return float(self.display_cost) / float(median)
+
+    def is_cost_outlier(self):
+        ratio = self.cost_outlier_ratio()
+        return ratio is not None and ratio >= self.COST_OUTLIER_THRESHOLD
 
     def __str__(self):
         return self.title

@@ -373,6 +373,16 @@ ul.messages { list-style: none; padding: 0; margin: var(--space-4) 0; }
   font-size: .82em;
 }
 
+.cost-outlier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .3em;
+  color: #b8790f;
+  font-weight: 700;
+  font-size: .78em;
+  margin-top: .2rem;
+}
+
 /* ---------- Misc ---------- */
 .page-nav { display: flex; justify-content: space-between; align-items: center; margin: var(--space-4) 0; color: var(--muted); font-size: .9em; }
 .export-links { display: flex; gap: var(--space-3); align-items: center; margin: var(--space-5) 0; font-size: .9em; }

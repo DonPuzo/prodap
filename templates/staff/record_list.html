@@ -20,7 +20,12 @@
       <td data-label="Title">{{ record.title }}</td>
       <td data-label="{{ ui.department }}">{{ record.department }}</td>
       <td data-label="{{ ui.status }}"><span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span></td>
-      <td data-label="{{ ui.cost }}">₦{{ record.display_cost|floatformat:0|intcomma }}</td>
+      <td data-label="{{ ui.cost }}">
+        ₦{{ record.display_cost|floatformat:0|intcomma }}
+        {% if record.is_cost_outlier %}
+          <br><span class="cost-outlier-badge" title="{{ record.cost_outlier_ratio|floatformat:1 }}x the department/method median">&#9888; Cost outlier</span>
+        {% endif %}
+      </td>
       <td data-label="Flags">
         {% if record.flag_count %}
           <span class="flag-count-badge">&#9873; {{ record.flag_count }}</span>

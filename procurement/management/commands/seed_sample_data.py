@@ -13,7 +13,11 @@ def d(days_offset):
 
 
 class Command(BaseCommand):
-    help = 'Seed 5-8 realistic sample procurement records spanning statuses (build prompt section 8 step 6).'
+    help = (
+        'Seed realistic sample procurement records spanning statuses (build prompt section 8 step 6), '
+        'including a Faculty of Science / Request for Quotations cluster that demonstrates the '
+        'cost-outlier flag (build prompt v2 Phase 2 item 2).'
+    )
 
     def handle(self, *args, **options):
         try:
@@ -49,11 +53,48 @@ class Command(BaseCommand):
                 description='Procurement of analytical balances, fume hoods, and glassware.',
                 department='Faculty of Science',
                 budget_source=ProcurementRecord.BudgetSource.GOVERNMENT_SUBVENTION,
-                estimated_cost=18_500_000,
+                estimated_cost=8_200_000,
                 procurement_method=methods[3],
                 location='Science Complex',
                 planned_start_date=d(-20), planned_end_date=d(40),
-                status_path=['Planning', 'Advertised'],
+                status_path=['Planning', 'Advertised', 'Tendering', 'Awarded'],
+                awarded_cost=7_800_000, vendor_name='ChemLab Instruments Ltd', vendor_registration_no='RC-661188',
+            ),
+            dict(
+                title='Supply of Reagents and Consumables for Biology Lab',
+                description='Routine restock of lab reagents and consumables for the academic year.',
+                department='Faculty of Science',
+                budget_source=ProcurementRecord.BudgetSource.GOVERNMENT_SUBVENTION,
+                estimated_cost=2_400_000,
+                procurement_method=methods[3],
+                location='Science Complex',
+                planned_start_date=d(-40), planned_end_date=d(-5), actual_start_date=d(-38), actual_end_date=d(-6),
+                status_path=['Planning', 'Advertised', 'Awarded', 'Implementation', 'Completed'],
+                awarded_cost=2_300_000, vendor_name='BioSupply Nigeria Ltd', vendor_registration_no='RC-220091',
+            ),
+            dict(
+                title='Procurement of Microscopes for Physics Lab',
+                description='Replacement of aging compound microscopes for undergraduate practicals.',
+                department='Faculty of Science',
+                budget_source=ProcurementRecord.BudgetSource.GOVERNMENT_SUBVENTION,
+                estimated_cost=2_700_000,
+                procurement_method=methods[3],
+                location='Science Complex',
+                planned_start_date=d(-70), planned_end_date=d(-20), actual_start_date=d(-65), actual_end_date=d(-22),
+                status_path=['Planning', 'Advertised', 'Awarded', 'Implementation', 'Completed'],
+                awarded_cost=2_600_000, vendor_name='OptiScience Instruments', vendor_registration_no='RC-330512',
+            ),
+            dict(
+                title='Supply of Safety Gear for Science Workshops',
+                description='Lab coats, goggles, and fire safety equipment for science workshops.',
+                department='Faculty of Science',
+                budget_source=ProcurementRecord.BudgetSource.GOVERNMENT_SUBVENTION,
+                estimated_cost=2_200_000,
+                procurement_method=methods[3],
+                location='Science Complex',
+                planned_start_date=d(-15), planned_end_date=d(20),
+                status_path=['Planning', 'Advertised', 'Awarded'],
+                awarded_cost=2_100_000, vendor_name='SafeGuard Supplies Ltd', vendor_registration_no='RC-440873',
             ),
             dict(
                 title='Construction of 500-Capacity Student Hostel Block D',

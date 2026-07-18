@@ -42,7 +42,7 @@ class RecordFlagInline(admin.TabularInline):
 
 @admin.register(ProcurementRecord)
 class ProcurementRecordAdmin(admin.ModelAdmin):
-    list_display = ('title', 'department', 'status', 'budget_source', 'display_cost', 'flag_count')
+    list_display = ('title', 'department', 'status', 'budget_source', 'display_cost', 'flag_count', 'cost_outlier')
     list_filter = ('status', 'budget_source', 'department')
     search_fields = ('title', 'vendor_name')
     readonly_fields = ('status', 'created_at', 'updated_at')
@@ -51,3 +51,7 @@ class ProcurementRecordAdmin(admin.ModelAdmin):
     @admin.display(description='Flags')
     def flag_count(self, obj):
         return obj.flags.count()
+
+    @admin.display(description='Cost check', boolean=True)
+    def cost_outlier(self, obj):
+        return obj.is_cost_outlier()

@@ -51,7 +51,7 @@ venv\Scripts\pip install -r requirements.txt      # Windows
 venv\Scripts\python manage.py migrate
 venv\Scripts\python manage.py seed_law_profiles   # federal PPA 2007 profile
 venv\Scripts\python manage.py seed_users          # local-only admin + officer accounts
-venv\Scripts\python manage.py seed_sample_data    # 7 sample procurement records
+venv\Scripts\python manage.py seed_sample_data    # 10 sample procurement records
 ```
 
 `seed_users` prints the local login credentials to the console. They are
@@ -90,8 +90,10 @@ venv\Scripts\python manage.py runserver
   English/Nigerian-Pidgin UI language toggle, all persisted client-side.
   Page weight is kept small (no JS framework, no external fonts/images) for
   users on slow or metered mobile connections.
-- 7 seeded sample procurement records spanning every status, including one
-  `Abandoned` project with a 5-step status history.
+- 10 seeded sample procurement records spanning every status, including one
+  `Abandoned` project with a multi-step status history, and a Faculty of
+  Science / Request for Quotations cluster that demonstrates the
+  cost-outlier flag (see below).
 
 ## What's implemented (Phase 2, started)
 
@@ -105,6 +107,15 @@ venv\Scripts\python manage.py runserver
   surfaced to procurement office staff on the record list and in the
   Django admin, so scrutiny is visible to the people responsible for the
   project, not routed into a queue nobody reads.
+- **Rule-based cost-outlier flag** (Phase 2 item 2, `ProcurementRecord.
+  is_cost_outlier()`): flags a record when its cost is ≥25% above the
+  median awarded cost for the same procurement method + department.
+  Explicitly rule-based, not ML — a plain median comparison, chosen to
+  stay explainable and cheap at university scale (mirrors the mechanism
+  behind NOCOPO's reported ₦173bn savings via "price intelligence").
+  Surfaced as a badge on the staff record list and as a column in the
+  Django admin; not shown on the public dashboard (Phase 2 scope was
+  "shown to admins" — the public already has citizen flagging).
 
 ## What's explicitly deferred (Phase 2 remainder — do not build without being asked)
 
@@ -112,16 +123,15 @@ In roughly the priority order suggested by comparable systems elsewhere
 (see `PRODAP_AGENT_BUILD_PROMPT_V2.md` section 0 for the evidence behind
 this ordering):
 
-1. A rule-based (not ML) cost-outlier flag for admins.
-2. Multi-step approval/sign-off workflow (council/bursar chain).
-3. Vendor/contractor self-service portal (tender applications,
+1. Multi-step approval/sign-off workflow (council/bursar chain).
+2. Vendor/contractor self-service portal (tender applications,
    prequalification).
-4. Photo-evidence / geotagged status updates.
-5. Multi-tenant self-service onboarding UI (the control plane for adding
+3. Photo-evidence / geotagged status updates.
+4. Multi-tenant self-service onboarding UI (the control plane for adding
    new universities).
-6. Embeddable badge/widget for external university homepages.
-7. Additional state law profiles beyond the first federal one.
-8. Full multi-language support (Yoruba, Hausa, Igbo) via real translation,
+5. Embeddable badge/widget for external university homepages.
+6. Additional state law profiles beyond the first federal one.
+7. Full multi-language support (Yoruba, Hausa, Igbo) via real translation,
    beyond the Phase 1 English/Pidgin toggle.
 
 ## Tech stack
