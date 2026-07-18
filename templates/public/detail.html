@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}{{ record.title }} — {{ tenant_name }}{% endblock %}
+{% block content %}
+
+<p><a href="{% url 'public_dashboard' %}">&laquo; {{ ui.back_to_dashboard }}</a></p>
+
+<div class="detail-hero">
+  <h2>{{ record.title }}</h2>
+  <span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span>
+</div>
+
+{% if record.description %}<p class="detail-description">{{ record.description }}</p>{% endif %}
+
+<div class="detail-grid">
+  <div class="field">
+    <div class="label">{{ ui.estimated_cost }}</div>
+    <div class="val">₦{{ record.estimated_cost|floatformat:0|intcomma }}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.awarded_cost }}</div>
+    <div class="val">{% if record.awarded_cost %}₦{{ record.awarded_cost|floatformat:0|intcomma }}{% else %}—{% endif %}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.budget_source }}</div>
+    <div class="val">{{ record.budget_source }}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.procurement_method }}</div>
+    <div class="val">{{ record.procurement_method }}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.department }}</div>
+    <div class="val">{{ record.department }}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.location }}</div>
+    <div class="val">{{ record.location }}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.vendor }}</div>
+    <div class="val">{{ record.vendor_name|default:"—" }}</div>
+  </div>
+  <div class="field">
+    <div class="label">{{ ui.planned_timeline }}</div>
+    <div class="val">{{ record.planned_start_date }} → {{ record.planned_end_date }}</div>
+  </div>
+  <div class="field">
+    <div class="label">Governing law</div>
+    <div class="val">{{ record.law_profile.governing_law }}</div>
+  </div>
+</div>
+
+<h3>{{ ui.status_history }}</h3>
+{% if history %}
+<ul class="timeline">
+  {% for update in history %}
+  <li>
+    <div class="when">{{ update.updated_at }} — {{ update.updated_by.username }}</div>
+    <div class="transition">{{ update.old_status|default:"—" }} → {{ update.new_status }}</div>
+    {% if update.note %}<div class="note">{{ update.note }}</div>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>{{ ui.no_history }}</p>
+{% endif %}
+
+{% endblock %}

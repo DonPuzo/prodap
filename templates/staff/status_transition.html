@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Change status: {{ record.title }}</h2>
+<p>Current status: <span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span></p>
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Record status change</button>
+    <a class="btn btn-secondary" href="{% url 'staff_record_list' %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

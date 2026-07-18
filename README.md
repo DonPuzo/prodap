@@ -1,0 +1,121 @@
+# ProDAP — Procurement Digital Application Platform
+
+ProDAP is a standalone public procurement transparency platform for
+Nigerian universities, modeled conceptually on the federal NOCOPO portal
+but built as a hosted, per-university instance. Anyone — students, staff,
+journalists, the public — can browse a university's procurement records
+with no login required, while authorized procurement staff log in to
+create and manage records through their full lifecycle (planning →
+advertised → tendering → awarded → implementation → completed/abandoned),
+with every status change permanently logged in an audit trail. See
+`PRODAP_AGENT_BUILD_PROMPT.md` and `PRODAP_AGENT_BUILD_PROMPT_V2.md` for
+the full product spec and the reasoning behind it.
+
+## Setup
+
+### 1. Prerequisites
+
+- Python 3.12+ (tested on 3.14)
+- PostgreSQL (tested on 18), running locally
+
+### 2. Create the database and role
+
+Using `psql` or pgAdmin, connected as a postgres superuser:
+
+```sql
+CREATE DATABASE prodap;
+CREATE USER prodap_user WITH PASSWORD 'your-local-dev-password';
+GRANT ALL PRIVILEGES ON DATABASE prodap TO prodap_user;
+ALTER DATABASE prodap OWNER TO prodap_user;
+```
+
+### 3. Environment
+
+```bash
+cp .env.example .env
+# edit .env: set DB_PASSWORD to match what you chose above,
+# and generate a real SECRET_KEY for anything beyond local dev.
+```
+
+### 4. Install dependencies
+
+```bash
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt      # Windows
+# source venv/bin/activate && pip install -r requirements.txt   # macOS/Linux
+```
+
+### 5. Migrate and seed
+
+```bash
+venv\Scripts\python manage.py migrate
+venv\Scripts\python manage.py seed_law_profiles   # federal PPA 2007 profile
+venv\Scripts\python manage.py seed_users          # local-only admin + officer accounts
+venv\Scripts\python manage.py seed_sample_data    # 7 sample procurement records
+```
+
+`seed_users` prints the local login credentials to the console. They are
+obviously fake and **must be changed before any real deployment**.
+
+### 6. Run
+
+```bash
+venv\Scripts\python manage.py runserver
+```
+
+- Public dashboard: http://127.0.0.1:8000/ — no login required.
+- Staff login: http://127.0.0.1:8000/staff/login/
+- Django admin: http://127.0.0.1:8000/admin/
+- Open data export: `/export/data.json` and `/export/data.csv`
+
+## What's implemented (Phase 1 / MVP)
+
+- Public transparency dashboard: search (title/vendor), filter (status,
+  budget source), project list, project detail with full status-history
+  timeline, and summary stats (active project count, total contract value).
+  Zero authentication required, verified via direct HTTP checks.
+- Procurement office backend: login (`procurement_officer` / `admin`
+  roles), create/edit records, and a status-transition action that always
+  requires a note and writes an immutable `status_updates` row in the same
+  transaction as the status change — there is no code path, including the
+  Django admin, that can change status without it.
+- One fully-populated law profile (federal PPA 2007) driving the
+  `procurement_method` choices on the record form — not a hardcoded
+  dropdown. The law-profile system is built to take additional profiles as
+  data, with no code change required.
+- Open data export (JSON + CSV) of the same public-safe fields shown on
+  the dashboard, field-named to map cleanly onto the Open Contracting Data
+  Standard used by Nigeria's own NOCOPO portal and Rwanda's Umucyo system.
+- Baseline accessibility: high-contrast toggle, text-size toggle, and an
+  English/Nigerian-Pidgin UI language toggle, all persisted client-side.
+  Page weight is kept small (no JS framework, no external fonts/images) for
+  users on slow or metered mobile connections.
+- 7 seeded sample procurement records spanning every status, including one
+  `Abandoned` project with a 5-step status history.
+
+## What's explicitly deferred (Phase 2 — do not build without being asked)
+
+In roughly the priority order suggested by comparable systems elsewhere
+(see `PRODAP_AGENT_BUILD_PROMPT_V2.md` section 0 for the evidence behind
+this ordering):
+
+1. Citizen feedback/flagging tied to individual projects — the
+   highest-evidenced anti-corruption feature in this category.
+2. A rule-based (not ML) cost-outlier flag for admins.
+3. Multi-step approval/sign-off workflow (council/bursar chain).
+4. Vendor/contractor self-service portal (tender applications,
+   prequalification).
+5. Photo-evidence / geotagged status updates.
+6. Multi-tenant self-service onboarding UI (the control plane for adding
+   new universities).
+7. Embeddable badge/widget for external university homepages.
+8. Additional state law profiles beyond the first federal one.
+9. Full multi-language support (Yoruba, Hausa, Igbo) via real translation,
+   beyond the Phase 1 English/Pidgin toggle.
+
+## Tech stack
+
+Django 6 + PostgreSQL + server-rendered Django templates, session-based
+auth with role-based access control. See `PRODAP_AGENT_BUILD_PROMPT_V2.md`
+for the free-forever hosting comparison (Oracle Cloud Always Free
+recommended over Render/Railway, which have free-tier expiry traps).

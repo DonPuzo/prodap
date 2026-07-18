@@ -1,0 +1,56 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Public procurement transparency dashboard for {{ tenant_name }} — browse contracts, tenders, and project status with no login required.">
+<title>{% block title %}{{ tenant_name }} — Procurement Transparency{% endblock %}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%230f6b4c'/%3E%3Ctext x='50' y='68' font-size='58' font-family='system-ui,sans-serif' font-weight='800' fill='white' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="{% static 'procurement/css/style.css' %}">
+</head>
+<body>
+<div class="container">
+  <div class="a11y-bar" aria-label="Accessibility and language settings">
+    <button type="button" id="toggle-contrast">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+      <span>High contrast</span>
+    </button>
+    <button type="button" id="toggle-font">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M6 18 10 6l4 12M7.2 14h5.6M15 18l3-8 3 8"/></svg>
+      <span>Text size</span>
+    </button>
+    <a href="{% url 'set_lang' 'en' %}" class="{% if current_lang == 'en' %}current-lang{% endif %}">EN</a>
+    <a href="{% url 'set_lang' 'pcm' %}" class="{% if current_lang == 'pcm' %}current-lang{% endif %}">Pidgin</a>
+    <span class="spacer"></span>
+    {% if user.is_authenticated %}
+      <a href="{% url 'staff_record_list' %}">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>
+        {{ user.username }}
+      </a>
+      <a href="{% url 'staff_logout' %}">Log out</a>
+    {% else %}
+      <a href="{% url 'staff_login' %}">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+        {{ ui.staff_login }}
+      </a>
+    {% endif %}
+  </div>
+  <header class="site-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <div>
+        <h1><a href="{% url 'public_dashboard' %}">{{ tenant_name }}</a></h1>
+        <p class="tagline">{{ ui.site_tagline }}</p>
+      </div>
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <p>ProDAP — Procurement Digital Application Platform. Public data, no login required. Every status change on this platform is permanently logged.</p>
+  </footer>
+</div>
+<script src="{% static 'procurement/js/toggles.js' %}"></script>
+</body>
+</html>

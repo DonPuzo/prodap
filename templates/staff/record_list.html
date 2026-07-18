@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block content %}
+<div class="detail-hero">
+  <h2>Procurement Records</h2>
+  <a class="btn" href="{% url 'staff_record_create' %}">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    New record
+  </a>
+</div>
+
+{% if records %}
+<table class="record-list">
+  <thead>
+    <tr><th>Title</th><th>{{ ui.department }}</th><th>{{ ui.status }}</th><th>{{ ui.cost }}</th><th>Actions</th></tr>
+  </thead>
+  <tbody>
+    {% for record in records %}
+    <tr>
+      <td data-label="Title">{{ record.title }}</td>
+      <td data-label="{{ ui.department }}">{{ record.department }}</td>
+      <td data-label="{{ ui.status }}"><span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span></td>
+      <td data-label="{{ ui.cost }}">₦{{ record.display_cost|floatformat:0|intcomma }}</td>
+      <td data-label="Actions">
+        <div class="actions-row">
+          <a class="btn btn-secondary" href="{% url 'staff_record_edit' record.id %}">Edit</a>
+          <a class="btn btn-secondary" href="{% url 'staff_status_transition' record.id %}">Change status</a>
+          <a class="btn btn-secondary" href="{% url 'public_record_detail' record.id %}">Public page</a>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state"><p>No records yet.</p></div>
+{% endif %}
+{% endblock %}
