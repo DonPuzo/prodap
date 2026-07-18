@@ -27,6 +27,7 @@ CREATE DATABASE prodap;
 CREATE USER prodap_user WITH PASSWORD 'your-local-dev-password';
 GRANT ALL PRIVILEGES ON DATABASE prodap TO prodap_user;
 ALTER DATABASE prodap OWNER TO prodap_user;
+ALTER USER prodap_user CREATEDB;  -- needed so `manage.py test` can spin up a test database
 ```
 
 ### 3. Environment
@@ -67,6 +68,17 @@ venv\Scripts\python manage.py runserver
 - Staff login: http://127.0.0.1:8000/staff/login/
 - Django admin: http://127.0.0.1:8000/admin/
 - Open data export: `/export/data.json` and `/export/data.csv`
+
+### 7. Run tests
+
+```bash
+venv\Scripts\python manage.py test procurement
+```
+
+Covers: the audit trail can't be bypassed or left partial, law-profile
+validation rejects out-of-profile procurement methods, the cost-outlier
+math, citizen-flag session deduplication, and that every public view stays
+accessible with zero auth while every staff view correctly requires login.
 
 ## What's implemented (Phase 1 / MVP)
 
