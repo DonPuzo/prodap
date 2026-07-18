@@ -1,14 +1,15 @@
 import csv
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import ProcurementRecordForm, StatusTransitionForm
 from .i18n import STRINGS
-from .models import ProcurementRecord
+from .models import ProcurementRecord, RecordFlag
 from .services import transition_status
 
 
@@ -65,7 +66,31 @@ def public_dashboard(request):
 def public_record_detail(request, pk):
     record = get_object_or_404(ProcurementRecord.objects.select_related('law_profile'), pk=pk)
     history = record.status_updates.select_related('updated_by').all()
-    return render(request, 'public/detail.html', {'record': record, 'history': history})
+    flagged_session = request.session.get('flagged_records', [])
+    return render(request, 'public/detail.html', {
+        'record': record,
+        'history': history,
+        'flag_count': record.flags.count(),
+        'already_flagged': str(record.id) in flagged_session,
+    })
+
+
+def flag_record(request, pk):
+    """Public 'flag this project as concerning' — no login, no moderation
+    queue, just a visible count. One flag per browser session per record,
+    to keep the count meaningful without building real rate-limiting
+    (build prompt v2 Phase 2 item 1 — deliberately minimal)."""
+    record = get_object_or_404(ProcurementRecord, pk=pk)
+    if request.method == 'POST':
+        flagged_session = request.session.get('flagged_records', [])
+        if str(record.id) not in flagged_session:
+            RecordFlag.objects.create(record=record, note=request.POST.get('note', '').strip())
+            flagged_session.append(str(record.id))
+            request.session['flagged_records'] = flagged_session
+            messages.success(request, 'Thank you — this project has been flagged for public scrutiny.')
+        else:
+            messages.info(request, "You've already flagged this project from this browser.")
+    return redirect('public_record_detail', pk=record.id)
 
 
 # --- Open data export (v2 section 5B) — same public-safe fields as the
@@ -119,7 +144,7 @@ def export_csv(request):
 
 @login_required
 def staff_record_list(request):
-    records = ProcurementRecord.objects.select_related('law_profile').all()
+    records = ProcurementRecord.objects.select_related('law_profile').annotate(flag_count=Count('flags'))
     return render(request, 'staff/record_list.html', {'records': records})
 
 

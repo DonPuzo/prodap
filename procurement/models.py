@@ -117,6 +117,28 @@ class ProcurementRecord(models.Model):
         return self.title
 
 
+class RecordFlag(models.Model):
+    """Public 'flag this project as concerning' signal — Phase 2 item 1,
+    the highest-evidenced anti-corruption feature in this category (see
+    PRODAP_AGENT_BUILD_PROMPT_V2.md section 0, item 4 / Ukraine's Dozorro).
+
+    Deliberately minimal: no moderation workflow, no status, no assignment.
+    Just a public count plus optional notes, visible to both the public and
+    staff, so scrutiny is visible rather than routed through a queue.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    record = models.ForeignKey(ProcurementRecord, on_delete=models.CASCADE, related_name='flags')
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Flag on {self.record.title} ({self.created_at:%Y-%m-%d})'
+
+
 class StatusUpdate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     record = models.ForeignKey(ProcurementRecord, on_delete=models.CASCADE, related_name='status_updates')

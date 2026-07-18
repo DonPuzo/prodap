@@ -66,4 +66,28 @@
 <p>{{ ui.no_history }}</p>
 {% endif %}
 
+<div class="flag-box">
+  <h3>{{ ui.flag_heading }}</h3>
+  <p class="flag-count">
+    {% if flag_count %}
+      <span class="flag-count-badge">&#9873; <strong>{{ flag_count }}</strong> flag{{ flag_count|pluralize }} {{ ui.flag_count_suffix }}</span>
+    {% else %}
+      {{ ui.flag_count_zero }}
+    {% endif %}
+  </p>
+  {% if already_flagged %}
+    <p>{{ ui.already_flagged }}</p>
+  {% else %}
+    <button type="button" class="btn btn-flag flag-toggle" data-toggle-target="#flag-form">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M5 21V4a1 1 0 0 1 1-1h11l-2 4 2 4H6"/></svg>
+      {{ ui.flag_button }}
+    </button>
+    <form id="flag-form" class="flag-form" method="post" action="{% url 'flag_record' record.id %}">
+      {% csrf_token %}
+      <textarea name="note" placeholder="{{ ui.flag_note_placeholder }}"></textarea>
+      <button class="btn btn-flag" type="submit">{{ ui.flag_submit }}</button>
+    </form>
+  {% endif %}
+</div>
+
 {% endblock %}

@@ -93,24 +93,35 @@ venv\Scripts\python manage.py runserver
 - 7 seeded sample procurement records spanning every status, including one
   `Abandoned` project with a 5-step status history.
 
-## What's explicitly deferred (Phase 2 — do not build without being asked)
+## What's implemented (Phase 2, started)
+
+- **Citizen feedback/flagging** (Phase 2 item 1 — the highest-evidenced
+  anti-corruption feature in this category, per Ukraine's Dozorro): a
+  public "flag this project as concerning" button on every project detail
+  page, with an optional note. No login required. Deliberately minimal —
+  no moderation queue, no status workflow, just a visible public count
+  (capped at one flag per browser session per project to keep counts
+  meaningful without building real rate-limiting). Flag counts are also
+  surfaced to procurement office staff on the record list and in the
+  Django admin, so scrutiny is visible to the people responsible for the
+  project, not routed into a queue nobody reads.
+
+## What's explicitly deferred (Phase 2 remainder — do not build without being asked)
 
 In roughly the priority order suggested by comparable systems elsewhere
 (see `PRODAP_AGENT_BUILD_PROMPT_V2.md` section 0 for the evidence behind
 this ordering):
 
-1. Citizen feedback/flagging tied to individual projects — the
-   highest-evidenced anti-corruption feature in this category.
-2. A rule-based (not ML) cost-outlier flag for admins.
-3. Multi-step approval/sign-off workflow (council/bursar chain).
-4. Vendor/contractor self-service portal (tender applications,
+1. A rule-based (not ML) cost-outlier flag for admins.
+2. Multi-step approval/sign-off workflow (council/bursar chain).
+3. Vendor/contractor self-service portal (tender applications,
    prequalification).
-5. Photo-evidence / geotagged status updates.
-6. Multi-tenant self-service onboarding UI (the control plane for adding
+4. Photo-evidence / geotagged status updates.
+5. Multi-tenant self-service onboarding UI (the control plane for adding
    new universities).
-7. Embeddable badge/widget for external university homepages.
-8. Additional state law profiles beyond the first federal one.
-9. Full multi-language support (Yoruba, Hausa, Igbo) via real translation,
+6. Embeddable badge/widget for external university homepages.
+7. Additional state law profiles beyond the first federal one.
+8. Full multi-language support (Yoruba, Hausa, Igbo) via real translation,
    beyond the Phase 1 English/Pidgin toggle.
 
 ## Tech stack

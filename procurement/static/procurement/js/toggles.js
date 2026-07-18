@@ -43,5 +43,12 @@
         save(pref);
       });
     }
+
+    document.querySelectorAll('[data-toggle-target]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var target = document.querySelector(btn.getAttribute('data-toggle-target'));
+        if (target) target.classList.toggle('open');
+      });
+    });
   });
 })();

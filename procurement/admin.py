@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from .models import LawProfile, ProcurementRecord, StatusUpdate, User
+from .models import LawProfile, ProcurementRecord, RecordFlag, StatusUpdate, User
 
 
 @admin.register(User)
@@ -29,10 +29,25 @@ class StatusUpdateInline(admin.TabularInline):
         return False
 
 
+class RecordFlagInline(admin.TabularInline):
+    model = RecordFlag
+    extra = 0
+    readonly_fields = ('id', 'note', 'created_at')
+    can_delete = True
+
+    def has_add_permission(self, request, obj=None):
+        # flags come from the public flag_record view only.
+        return False
+
+
 @admin.register(ProcurementRecord)
 class ProcurementRecordAdmin(admin.ModelAdmin):
-    list_display = ('title', 'department', 'status', 'budget_source', 'display_cost')
+    list_display = ('title', 'department', 'status', 'budget_source', 'display_cost', 'flag_count')
     list_filter = ('status', 'budget_source', 'department')
     search_fields = ('title', 'vendor_name')
     readonly_fields = ('status', 'created_at', 'updated_at')
-    inlines = [StatusUpdateInline]
+    inlines = [StatusUpdateInline, RecordFlagInline]
+
+    @admin.display(description='Flags')
+    def flag_count(self, obj):
+        return obj.flags.count()

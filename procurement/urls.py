@@ -7,6 +7,7 @@ urlpatterns = [
     # Public dashboard — no auth, ever.
     path('', views.public_dashboard, name='public_dashboard'),
     path('projects/<uuid:pk>/', views.public_record_detail, name='public_record_detail'),
+    path('projects/<uuid:pk>/flag/', views.flag_record, name='flag_record'),
     path('export/data.json', views.export_json, name='export_json'),
     path('export/data.csv', views.export_csv, name='export_csv'),
     path('set-lang/<str:lang_code>/', views.set_lang, name='set_lang'),

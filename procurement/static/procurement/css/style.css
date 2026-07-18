@@ -341,6 +341,38 @@ ul.errorlist { color: #d1332f; list-style: none; padding: 0; margin: .25rem 0 0;
 
 .actions-row { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }
 
+/* ---------- Messages ---------- */
+ul.messages { list-style: none; padding: 0; margin: var(--space-4) 0; }
+.message { padding: .7rem 1rem; border-radius: var(--radius-sm); margin-bottom: var(--space-2); font-size: .9em; }
+.message-success { background: var(--color-primary-light); color: var(--color-primary-dark); border: 1px solid var(--color-primary); }
+.message-info { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); }
+
+/* ---------- Citizen flagging ---------- */
+.flag-box {
+  margin: var(--space-5) 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.flag-box h3 { margin-top: 0; }
+.flag-count { color: var(--muted); font-size: .9em; margin-bottom: var(--space-2); }
+.flag-count strong { color: var(--fg); }
+.flag-toggle { display: inline-flex; align-items: center; gap: .4em; }
+.flag-form { margin-top: var(--space-3); display: none; }
+.flag-form.open { display: block; }
+.flag-form textarea { min-height: 4rem; }
+.btn-flag { background: #a02622; }
+.btn-flag:hover { background: #7e1c19; }
+.flag-count-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .3em;
+  color: #a02622;
+  font-weight: 700;
+  font-size: .82em;
+}
+
 /* ---------- Misc ---------- */
 .page-nav { display: flex; justify-content: space-between; align-items: center; margin: var(--space-4) 0; color: var(--muted); font-size: .9em; }
 .export-links { display: flex; gap: var(--space-3); align-items: center; margin: var(--space-5) 0; font-size: .9em; }

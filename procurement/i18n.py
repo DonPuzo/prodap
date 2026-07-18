@@ -32,6 +32,13 @@ STRINGS = {
         'no_history': 'No status changes recorded yet.',
         'staff_login': 'Staff Login',
         'download_data': 'Download open data',
+        'flag_heading': 'Public Scrutiny',
+        'flag_button': 'Flag this project as concerning',
+        'flag_note_placeholder': 'Optional: what looks wrong? (e.g. cost seems inflated, project appears stalled)',
+        'flag_submit': 'Submit flag',
+        'flag_count_zero': 'No one has flagged this project yet.',
+        'flag_count_suffix': 'on this project — visible to procurement staff.',
+        'already_flagged': "You've already flagged this project from this browser.",
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -57,6 +64,13 @@ STRINGS = {
         'no_history': 'No change dey recorded yet.',
         'staff_login': 'Staff Login',
         'download_data': 'Download the data',
+        'flag_heading': 'Make Dem Know',
+        'flag_button': 'Flag dis project as fishy',
+        'flag_note_placeholder': 'You fit talk wetin dey wrong (e.g. cost too much, work don stop)',
+        'flag_submit': 'Send am',
+        'flag_count_zero': 'Nobody don flag dis project yet.',
+        'flag_count_suffix': 'dey for dis project — procurement people go see am.',
+        'already_flagged': 'You don already flag dis project from dis browser.',
     },
 }
 

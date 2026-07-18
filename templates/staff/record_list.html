@@ -12,7 +12,7 @@
 {% if records %}
 <table class="record-list">
   <thead>
-    <tr><th>Title</th><th>{{ ui.department }}</th><th>{{ ui.status }}</th><th>{{ ui.cost }}</th><th>Actions</th></tr>
+    <tr><th>Title</th><th>{{ ui.department }}</th><th>{{ ui.status }}</th><th>{{ ui.cost }}</th><th>Flags</th><th>Actions</th></tr>
   </thead>
   <tbody>
     {% for record in records %}
@@ -21,6 +21,13 @@
       <td data-label="{{ ui.department }}">{{ record.department }}</td>
       <td data-label="{{ ui.status }}"><span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span></td>
       <td data-label="{{ ui.cost }}">₦{{ record.display_cost|floatformat:0|intcomma }}</td>
+      <td data-label="Flags">
+        {% if record.flag_count %}
+          <span class="flag-count-badge">&#9873; {{ record.flag_count }}</span>
+        {% else %}
+          <span class="flag-count">0</span>
+        {% endif %}
+      </td>
       <td data-label="Actions">
         <div class="actions-row">
           <a class="btn btn-secondary" href="{% url 'staff_record_edit' record.id %}">Edit</a>
