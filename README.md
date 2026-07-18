@@ -80,6 +80,35 @@ validation rejects out-of-profile procurement methods, the cost-outlier
 math, citizen-flag session deduplication, and that every public view stays
 accessible with zero auth while every staff view correctly requires login.
 
+## Deploying for testing access (free forever, no server admin)
+
+This pairs Render's free web-service tier (genuinely free forever, sleeps
+after 15 min idle, wakes on the next request) with Neon's free Postgres
+tier (also free forever, no 90-day expiry — unlike Render's *own* free
+Postgres, which does expire after 90 days; this setup avoids that trap
+entirely by keeping the database on Neon).
+
+1. **Database — Neon**: sign up free at neon.tech, create a project, and
+   copy the connection string it gives you (starts `postgresql://...`,
+   already includes `?sslmode=require`).
+2. **App — Render**: sign up free at render.com, connect this GitHub repo,
+   and choose **New → Blueprint** — Render will read `render.yaml` from
+   the repo root and configure the service automatically.
+3. When prompted for the `DATABASE_URL` environment variable (marked
+   `sync: false` in the blueprint, so Render asks rather than guessing),
+   paste the Neon connection string from step 1.
+4. Deploy. The build step runs migrations and all three seed commands
+   automatically (they're idempotent — safe to re-run on every deploy).
+5. **Get the staff login credentials**: open the deploy's build logs in
+   the Render dashboard and look for the `seed_users` output — it prints
+   a freshly generated `admin` and `officer` password, shown only once.
+   Save them from the log; there's no other way to retrieve them.
+
+This is a testing/demo deployment, not a hardened production one — see
+`PRODAP_AGENT_BUILD_PROMPT_V2.md` for the Oracle Cloud Always Free
+self-hosting path recommended once this is headed toward a real
+university deployment rather than just testing access.
+
 ## What's implemented (Phase 1 / MVP)
 
 - Public transparency dashboard: search (title/vendor), filter (status,

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: prodap
+    runtime: python
+    plan: free
+    buildCommand: >
+      pip install -r requirements.txt &&
+      python manage.py collectstatic --noinput &&
+      python manage.py migrate &&
+      python manage.py seed_law_profiles &&
+      python manage.py seed_users &&
+      python manage.py seed_sample_data
+    startCommand: gunicorn prodap_config.wsgi:application
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: TENANT_NAME
+        value: Demo Federal University
+      - key: DATABASE_URL
+        sync: false
