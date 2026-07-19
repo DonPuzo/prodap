@@ -43,17 +43,25 @@ class ProcurementRecordForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         # procurement_method choices are populated from the selected law
         # profile's data, never a hardcoded dropdown (build prompt section 7).
+        #
+        # NOTE: ProcurementRecord.id uses default=uuid.uuid4, so a fresh
+        # unsaved instance already has a non-None pk the moment it's
+        # constructed — `not self.instance.pk` is NOT a valid "is this a
+        # new record" check here (unlike Django's default auto-increment
+        # PKs). Use instance._state.adding instead, which Django sets
+        # specifically for this purpose regardless of PK strategy.
+        is_new = self.instance._state.adding
         law_profile = None
         if self.data.get('law_profile'):
             law_profile = LawProfile.objects.filter(pk=self.data.get('law_profile')).first()
-        elif self.instance and self.instance.law_profile_id:
+        elif not is_new and self.instance.law_profile_id:
             law_profile = self.instance.law_profile
-        elif not self.instance.pk:
+        elif is_new:
             law_profile = LawProfile.objects.first()
 
         method_choices = [(m, m) for m in law_profile.procurement_methods] if law_profile else []
         self.fields['procurement_method'] = forms.ChoiceField(choices=method_choices)
-        if law_profile and not self.initial.get('law_profile') and not self.instance.pk:
+        if law_profile and is_new and not self.initial.get('law_profile'):
             self.fields['law_profile'].initial = law_profile.pk
 
     def clean(self):

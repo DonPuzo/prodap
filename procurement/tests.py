@@ -98,6 +98,35 @@ class LawProfileValidationTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn('procurement_method', form.errors)
 
+    def test_new_unsaved_record_form_populates_method_choices(self):
+        """Regression test: ProcurementRecord.id uses default=uuid.uuid4, so
+        a fresh unsaved instance's .pk is never None/falsy — a naive
+        `not self.instance.pk` check to detect "new record" silently fails
+        for this model and left the create form's procurement_method
+        dropdown empty in production (nobody could create a record via the
+        UI at all). See forms.py ProcurementRecordForm.__init__."""
+        form = ProcurementRecordForm()
+        self.assertTrue(form.instance._state.adding)
+        self.assertGreater(len(form.fields['procurement_method'].choices), 0)
+
+    def test_staff_can_create_record_end_to_end(self):
+        """Drives the real view, not just the form in isolation — this is
+        the exact path that was broken in production."""
+        self.client.force_login(self.actor)
+        response = self.client.post(reverse('staff_record_create'), {
+            'title': 'End-to-End Create Test',
+            'department': 'Bursary',
+            'budget_source': ProcurementRecord.BudgetSource.IGR,
+            'estimated_cost': '750000',
+            'procurement_method': self.law_profile.procurement_methods[0],
+            'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=10),
+            'law_profile': self.law_profile.pk,
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ProcurementRecord.objects.filter(title='End-to-End Create Test').exists())
+
 
 class CostOutlierTests(TestCase):
     """Rule-based (not ML) cost-outlier flag (build prompt v2 Phase 2 item 2)."""
