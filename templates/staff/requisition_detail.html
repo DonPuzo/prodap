@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-hero">
+  <h2>{{ requisition.title }}</h2>
+  <span class="badge badge-{{ requisition.status }}">{{ requisition.get_status_display }}</span>
+</div>
+
+<div class="detail-grid">
+  {% if requisition.process_identifier %}
+  <div class="field"><div class="label">Process ID</div><div class="val">{{ requisition.process_identifier }}</div></div>
+  {% endif %}
+  <div class="field"><div class="label">{{ ui.department }}</div><div class="val">{{ requisition.department }}</div></div>
+  <div class="field"><div class="label">Requested Value</div><div class="val">₦{{ requisition.requested_value|floatformat:0 }}</div></div>
+  <div class="field"><div class="label">{{ ui.budget_source }}</div><div class="val">{{ requisition.budget_source }}</div></div>
+  <div class="field"><div class="label">Requested By</div><div class="val">{{ requisition.requested_by.username }}</div></div>
+  <div class="field"><div class="label">Plan Line</div><div class="val">{{ requisition.plan_line.item_description }}</div></div>
+  {% if requisition.funds_confirmed_by %}
+  <div class="field"><div class="label">Funds Confirmed By</div><div class="val">{{ requisition.funds_confirmed_by.username }}</div></div>
+  {% endif %}
+  {% if requisition.determined_method %}
+  <div class="field"><div class="label">Determined Method</div><div class="val">{{ requisition.determined_method }}</div></div>
+  <div class="field"><div class="label">Approving Authority</div><div class="val">{{ requisition.determined_approving_authority }}</div></div>
+  {% endif %}
+  {% if requisition.packaging_reviewed %}
+  <div class="field"><div class="label">Packaging Reviewed By</div><div class="val">{{ requisition.packaging_reviewed_by.username }}</div></div>
+  {% endif %}
+</div>
+
+<div class="actions-row">
+  {% if requisition.status == 'draft' %}
+    <a class="btn" href="{% url 'staff_requisition_submit' requisition.id %}">Submit requisition</a>
+  {% elif requisition.status == 'submitted' %}
+    <a class="btn" href="{% url 'staff_requisition_confirm_funds' requisition.id %}">Confirm / decline funds</a>
+  {% elif requisition.status == 'funds_confirmed' and not requisition.packaging_reviewed %}
+    <a class="btn" href="{% url 'staff_requisition_review_packaging' requisition.id %}">Review packaging (anti-splitting)</a>
+  {% elif requisition.status == 'funds_confirmed' and requisition.packaging_reviewed and not requisition.determined_method %}
+    <a class="btn" href="{% url 'staff_requisition_determine_method' requisition.id %}">Determine method</a>
+  {% elif requisition.status == 'funds_confirmed' and requisition.determined_method %}
+    <a class="btn" href="{% url 'staff_requisition_create_record' requisition.id %}">Create procurement record</a>
+  {% elif requisition.status == 'record_created' and record %}
+    <a class="btn btn-secondary" href="{% url 'staff_record_edit' record.id %}">View procurement record</a>
+  {% endif %}
+</div>
+{% endblock %}

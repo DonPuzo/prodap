@@ -2,16 +2,24 @@ import uuid
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 
 
 class User(AbstractUser):
     class Role(models.TextChoices):
-        PROCUREMENT_OFFICER = 'procurement_officer', 'Procurement Officer'
+        REQUESTING_UNIT = 'requesting_unit', 'Requesting Unit'
+        PROCUREMENT_UNIT = 'procurement_unit', 'Procurement Unit'
+        FINANCE = 'finance', 'Finance/Budget'
+        ACCOUNTING_OFFICER = 'accounting_officer', 'Accounting Officer'
         ADMIN = 'admin', 'Admin'
+        # Reserved for later phases — not built yet (Phase 2-4 of the
+        # e-procurement integration framework): evaluation_committee,
+        # tenders_board, bpp_reviewer, contract_manager, bidder, observer.
 
-    role = models.CharField(max_length=32, choices=Role.choices, default=Role.PROCUREMENT_OFFICER)
+    role = models.CharField(max_length=32, choices=Role.choices, default=Role.PROCUREMENT_UNIT)
 
     def __str__(self):
         return f'{self.get_full_name() or self.username} ({self.role})'
@@ -34,6 +42,165 @@ class LawProfile(models.Model):
         return self.governing_law
 
 
+class FinancialYear(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    law_profile = models.ForeignKey(LawProfile, on_delete=models.PROTECT, related_name='financial_years')
+    label = models.CharField(max_length=20)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    is_current = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [('law_profile', 'label')]
+        ordering = ['-start_date']
+
+    def __str__(self):
+        return self.label
+
+
+class ThresholdRule(models.Model):
+    """Versioned, effective-dated replacement for treating LawProfile's flat
+    `approval_thresholds` JSON as canonical. A new rule supersedes an old one
+    by closing its effective_to date and adding a new row — never mutating
+    or deleting history (e-procurement integration framework: "Non-Negotiable
+    Technical and Integrity Controls" / versioned threshold tables)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    law_profile = models.ForeignKey(LawProfile, on_delete=models.PROTECT, related_name='threshold_rules')
+    procurement_method = models.CharField(max_length=100)
+    min_value = models.DecimalField(max_digits=16, decimal_places=2)
+    max_value = models.DecimalField(max_digits=16, decimal_places=2, null=True, blank=True)
+    approving_authority = models.CharField(max_length=255)
+    bpp_prior_review_required = models.BooleanField(default=False)
+    is_default_for_range = models.BooleanField(
+        default=False,
+        help_text='Exactly one active rule per overlapping value range/date should be the default (open competitive bidding).',
+    )
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    note = models.TextField(blank=True, help_text='Legal citation / rationale for this rule.')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='threshold_rules_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-effective_from']
+
+    def clean(self):
+        if self.law_profile_id and self.procurement_method:
+            if self.procurement_method not in self.law_profile.procurement_methods:
+                raise ValidationError({
+                    'procurement_method': (
+                        f'"{self.procurement_method}" is not recognized by the '
+                        f'{self.law_profile.governing_law} profile.'
+                    )
+                })
+
+    def __str__(self):
+        upper = self.max_value if self.max_value is not None else 'unbounded'
+        return f'{self.procurement_method}: {self.min_value}-{upper} (from {self.effective_from})'
+
+
+class ProcessIdentifierSequence(models.Model):
+    """Race-safe counter for generating a unique procurement process
+    identifier at funds-confirmation time (select_for_update, not a racy
+    count()+1)."""
+
+    law_profile = models.ForeignKey(LawProfile, on_delete=models.PROTECT, related_name='process_id_sequences')
+    financial_year = models.ForeignKey(FinancialYear, on_delete=models.PROTECT, related_name='process_id_sequences')
+    last_value = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = [('law_profile', 'financial_year')]
+
+    def __str__(self):
+        return f'{self.law_profile_id}/{self.financial_year.label}: {self.last_value}'
+
+
+class ProcurementPlan(models.Model):
+    """The consolidated annual procurement plan for one financial year.
+    Only an approved plan line may initiate a procurement requisition —
+    the single most important stage gate in Phase 1 (see PlanLine)."""
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SUBMITTED = 'submitted', 'Submitted'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    law_profile = models.ForeignKey(LawProfile, on_delete=models.PROTECT, related_name='procurement_plans')
+    financial_year = models.ForeignKey(FinancialYear, on_delete=models.PROTECT, related_name='procurement_plans')
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    prepared_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='plans_prepared'
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name='plans_approved'
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('law_profile', 'financial_year')]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Procurement Plan {self.financial_year.label}'
+
+
+class PlanLine(models.Model):
+    """One need/item proposed by a requesting unit within an annual plan.
+    Approving the parent plan bulk-approves its non-amendment pending
+    lines; a line added later to an already-approved plan (is_amendment)
+    stays pending until individually approved."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    class Quarter(models.TextChoices):
+        Q1 = 'Q1', 'Q1'
+        Q2 = 'Q2', 'Q2'
+        Q3 = 'Q3', 'Q3'
+        Q4 = 'Q4', 'Q4'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    plan = models.ForeignKey(ProcurementPlan, on_delete=models.CASCADE, related_name='lines')
+    department = models.CharField(max_length=255)
+    item_description = models.CharField(max_length=255)
+    justification = models.TextField()
+    quantity = models.PositiveIntegerField(default=1)
+    unit_of_measure = models.CharField(max_length=50, blank=True)
+    estimated_cost = models.DecimalField(max_digits=16, decimal_places=2)
+    budget_line = models.CharField(max_length=255)
+    proposed_method = models.CharField(
+        max_length=100, blank=True,
+        help_text='Non-binding — the requisition\'s binding method comes from ThresholdRule.',
+    )
+    proposed_quarter = models.CharField(max_length=2, choices=Quarter.choices)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    is_amendment = models.BooleanField(default=False)
+    amendment_note = models.TextField(blank=True)
+    proposed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='plan_lines_proposed'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f'{self.item_description} ({self.department})'
+
+
 class ProcurementRecord(models.Model):
     class BudgetSource(models.TextChoices):
         TETFUND = 'TETFund', 'TETFund'
@@ -53,6 +220,15 @@ class ProcurementRecord(models.Model):
         ABANDONED = 'Abandoned', 'Abandoned'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Nullable: records seeded before Phase 1-Foundation (or any future
+    # record deliberately created outside the requisition flow) simply have
+    # requisition=None — that is honest, unambiguous "pre-Foundation legacy
+    # data" rather than a fabricated approval trail. String reference avoids
+    # a forward-declaration problem since Requisition is defined below and
+    # itself references ProcurementRecord.BudgetSource.
+    requisition = models.OneToOneField(
+        'Requisition', on_delete=models.PROTECT, null=True, blank=True, related_name='record'
+    )
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     department = models.CharField(max_length=255)
@@ -163,3 +339,106 @@ class StatusUpdate(models.Model):
 
     def __str__(self):
         return f'{self.record.title}: {self.old_status} -> {self.new_status}'
+
+
+class Requisition(models.Model):
+    """Created from an approved PlanLine, gated through funds confirmation,
+    packaging/anti-splitting review, and method/threshold determination
+    before it can produce a ProcurementRecord (see services.py for the
+    functions that enforce each gate — never write these fields directly
+    from a view)."""
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SUBMITTED = 'submitted', 'Submitted'
+        FUNDS_CONFIRMED = 'funds_confirmed', 'Funds Confirmed'
+        FUNDS_DECLINED = 'funds_declined', 'Funds Declined'
+        RECORD_CREATED = 'record_created', 'Record Created'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    process_identifier = models.CharField(max_length=50, unique=True, blank=True, null=True)
+    plan_line = models.ForeignKey(PlanLine, on_delete=models.PROTECT, related_name='requisitions')
+    title = models.CharField(max_length=255)
+    department = models.CharField(max_length=255)
+    requested_value = models.DecimalField(max_digits=16, decimal_places=2)
+    budget_source = models.CharField(max_length=32, choices=ProcurementRecord.BudgetSource.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='requisitions_created'
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    funds_confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='requisitions_funds_confirmed',
+    )
+    funds_confirmed_at = models.DateTimeField(null=True, blank=True)
+    funds_confirmation_note = models.TextField(blank=True)
+    packaging_reviewed = models.BooleanField(default=False)
+    packaging_review_note = models.TextField(blank=True)
+    packaging_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='requisitions_packaging_reviewed',
+    )
+    packaging_reviewed_at = models.DateTimeField(null=True, blank=True)
+    threshold_rule = models.ForeignKey(
+        ThresholdRule, on_delete=models.PROTECT, null=True, blank=True, related_name='requisitions'
+    )
+    determined_method = models.CharField(max_length=100, blank=True)
+    determined_approving_authority = models.CharField(max_length=255, blank=True)
+    bpp_prior_review_required = models.BooleanField(default=False)
+    method_override = models.CharField(max_length=100, blank=True)
+    method_override_justification = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+
+
+class AuditEvent(models.Model):
+    """Append-only log for every Phase 1-Foundation gate crossing (plan
+    approval, funds confirmation, packaging review, method determination,
+    ...). Deliberately a NEW, separate model from StatusUpdate — StatusUpdate
+    already does its one job (record status history) correctly and 19+
+    existing tests depend on its exact shape; a future unified audit view
+    can UNION both rather than forcing a breaking generalization now.
+
+    object_id is a plain UUIDField (not the usual loose CharField) because
+    every target model in this app uses UUID primary keys."""
+
+    class Action(models.TextChoices):
+        PLAN_SUBMITTED = 'plan_submitted', 'Plan Submitted'
+        PLAN_APPROVED = 'plan_approved', 'Plan Approved'
+        PLAN_REJECTED = 'plan_rejected', 'Plan Rejected'
+        PLAN_LINE_APPROVED = 'plan_line_approved', 'Plan Line Approved'
+        PLAN_LINE_REJECTED = 'plan_line_rejected', 'Plan Line Rejected'
+        REQUISITION_SUBMITTED = 'requisition_submitted', 'Requisition Submitted'
+        FUNDS_CONFIRMED = 'funds_confirmed', 'Funds Confirmed'
+        FUNDS_DECLINED = 'funds_declined', 'Funds Declined'
+        PACKAGING_REVIEWED = 'packaging_reviewed', 'Packaging Reviewed'
+        METHOD_DETERMINED = 'method_determined', 'Method Determined'
+        METHOD_OVERRIDDEN = 'method_overridden', 'Method Overridden'
+        RECORD_CREATED_FROM_REQUISITION = 'record_created_from_requisition', 'Record Created From Requisition'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.UUIDField()
+    target = GenericForeignKey('content_type', 'object_id')
+    action = models.CharField(max_length=40, choices=Action.choices)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='audit_events')
+    role_at_time = models.CharField(max_length=32)
+    reason = models.TextField(blank=True)
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['content_type', 'object_id'])]
+
+    def __str__(self):
+        return f'{self.action} by {self.actor_id} at {self.created_at:%Y-%m-%d %H:%M}'

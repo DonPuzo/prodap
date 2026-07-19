@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>New Requisition</h2>
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Create</button>
+    <a class="btn btn-secondary" href="{% url 'staff_requisition_list' %}">Cancel</a>
+  </form>
+</div>
+{% if not form.fields.plan_line.queryset.exists %}
+<p style="color: var(--muted); margin-top: var(--space-3);">
+  No approved plan lines are available yet — a requisition can only be created against an
+  <a href="{% url 'staff_plan_list' %}">approved plan line</a>.
+</p>
+{% endif %}
+{% endblock %}

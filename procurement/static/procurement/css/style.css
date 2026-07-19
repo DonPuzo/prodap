@@ -264,6 +264,17 @@ table.record-list td a.title-link:hover { color: var(--color-primary); text-deco
 .badge-completed { background: #1a8a44; }
 .badge-abandoned { background: #d1332f; }
 
+/* Phase 1-Foundation workflow statuses (plans/requisitions) */
+.badge-draft { background: #6b7280; }
+.badge-pending { background: #6b7280; }
+.badge-submitted { background: #1d64c9; }
+.badge-approved { background: #1a8a44; }
+.badge-rejected { background: #d1332f; }
+.badge-funds_confirmed { background: #1a8a44; }
+.badge-funds_declined { background: #d1332f; }
+.badge-record_created { background: #7c3aed; }
+.badge-cancelled { background: #6b7280; }
+
 /* ---------- Detail page ---------- */
 .detail-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
 .detail-hero h2 { margin: 0; font-size: 1.6em; }

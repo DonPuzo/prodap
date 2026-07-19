@@ -50,13 +50,16 @@ venv\Scripts\pip install -r requirements.txt      # Windows
 
 ```bash
 venv\Scripts\python manage.py migrate
-venv\Scripts\python manage.py seed_law_profiles   # federal PPA 2007 profile
-venv\Scripts\python manage.py seed_users          # local-only admin + officer accounts
+venv\Scripts\python manage.py seed_users          # local-only demo accounts, one per role
+venv\Scripts\python manage.py seed_law_profiles   # federal PPA 2007 profile + threshold rules (needs seed_users first)
 venv\Scripts\python manage.py seed_sample_data    # 10 sample procurement records
+venv\Scripts\python manage.py seed_foundation_demo # one demo plan walked end-to-end to a record
 ```
 
 `seed_users` prints the local login credentials to the console. They are
-obviously fake and **must be changed before any real deployment**.
+obviously fake and **must be changed before any real deployment**. Run it
+*before* `seed_law_profiles` — the threshold-rule seeding needs a
+superuser to attribute the rules to.
 
 ### 6. Run
 
@@ -97,7 +100,7 @@ entirely by keeping the database on Neon).
 3. When prompted for the `DATABASE_URL` environment variable (marked
    `sync: false` in the blueprint, so Render asks rather than guessing),
    paste the Neon connection string from step 1.
-4. Deploy. The build step runs migrations and all three seed commands
+4. Deploy. The build step runs migrations and all four seed commands
    automatically (they're idempotent — safe to re-run on every deploy).
 5. **Get the staff login credentials**: open the deploy's build logs in
    the Render dashboard and look for the `seed_users` output — it prints
@@ -115,8 +118,9 @@ university deployment rather than just testing access.
   budget source), project list, project detail with full status-history
   timeline, and summary stats (active project count, total contract value).
   Zero authentication required, verified via direct HTTP checks.
-- Procurement office backend: login (`procurement_officer` / `admin`
-  roles), create/edit records, and a status-transition action that always
+- Procurement office backend: login (role-based access — see Phase
+  1-Foundation below for the full five-role model), create/edit records,
+  and a status-transition action that always
   requires a note and writes an immutable `status_updates` row in the same
   transaction as the status change — there is no code path, including the
   Django admin, that can change status without it.
@@ -157,6 +161,52 @@ university deployment rather than just testing access.
   Surfaced as a badge on the staff record list and as a column in the
   Django admin; not shown on the public dashboard (Phase 2 scope was
   "shown to admins" — the public already has citizen flagging).
+
+## What's implemented (Phase 1-Foundation: statutory e-procurement layer)
+
+Building on a legal/technical blueprint from the project owner mapping the
+platform to the Nigerian Public Procurement Act 2007's statutory workflow,
+this adds the first of five phases converting ProDAP from a pure
+disclosure register into a genuine e-procurement *transaction* system —
+starting with the piece everything else depends on: a `ProcurementRecord`
+can no longer be created out of thin air.
+
+- **Annual procurement plans**: a `ProcurementPlan` per financial year,
+  made up of `PlanLine` items proposed by a Requesting Unit. Only an
+  approved plan line may initiate a procurement — approving the plan
+  bulk-approves its lines; a line added after approval (an amendment)
+  needs its own individual approval.
+- **Requisitions with a funds-confirmation gate**: a `Requisition` can only
+  be created against an *approved* plan line, and is blocked from
+  producing a procurement record until Finance has confirmed funds are
+  available — at which point a race-safe, unique process identifier is
+  generated (`{LAW-PROFILE}-{FINANCIAL-YEAR}-{00001}`).
+- **Anti-splitting review**: a required, written packaging-review note
+  before a procurement method can be determined — deliberately a human
+  decision aided by a read-only list of similar recent requisitions in the
+  same department, not automated pattern detection (that's a later phase).
+- **Versioned threshold/method rule engine**: `ThresholdRule` rows replace
+  treating the law profile's flat JSON thresholds as canonical — each rule
+  is effective-dated and never mutated, only superseded, so historical
+  determinations stay reconstructable.
+- **Real role separation, enforced twice**: five roles (`requesting_unit`,
+  `procurement_unit`, `finance`, `accounting_officer`, `admin`) gate which
+  screens a user can reach, and the service layer separately refuses to
+  let anyone approve or confirm their own request — a short-staffed unit
+  assigning one person two roles doesn't bypass this.
+- **A second, generic audit log** (`AuditEvent`) for every gate crossing
+  (plan approval, funds confirmation, packaging review, method
+  determination, record creation) — kept deliberately separate from the
+  existing `StatusUpdate` trail rather than merging them, since
+  `StatusUpdate` already does its one job correctly.
+
+**Explicitly not yet built** (Phases 2–5 of the same blueprint): encrypted
+electronic bid submission/opening, evaluation committees, Tenders Board
+approval routing, BPP Certificate of No Objection, contract/milestone/
+payment management, NOCOPO/OCDS export, audit analytics. Record `status`
+(Advertised → Completed) still transitions manually via the existing
+staff status-transition screen — evidence-gating those states isn't
+honestly buildable until the evaluation/approval machinery above exists.
 
 ## What's explicitly deferred (Phase 2 remainder — do not build without being asked)
 

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-hero">
+  <h2>Requisitions</h2>
+  <a class="btn" href="{% url 'staff_requisition_create' %}">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    New requisition
+  </a>
+</div>
+
+{% if requisitions %}
+<table class="record-list">
+  <thead>
+    <tr><th>Title</th><th>{{ ui.department }}</th><th>Value</th><th>Status</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for r in requisitions %}
+    <tr>
+      <td data-label="Title">{{ r.title }}</td>
+      <td data-label="{{ ui.department }}">{{ r.department }}</td>
+      <td data-label="Value">₦{{ r.requested_value|floatformat:0 }}</td>
+      <td data-label="Status"><span class="badge badge-{{ r.status }}">{{ r.get_status_display }}</span></td>
+      <td data-label=""><a class="btn btn-secondary" href="{% url 'staff_requisition_detail' r.id %}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state"><p>No requisitions yet.</p></div>
+{% endif %}
+{% endblock %}

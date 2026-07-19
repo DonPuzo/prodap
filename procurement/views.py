@@ -8,10 +8,40 @@ from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import LocalizedAuthenticationForm, ProcurementRecordForm, StatusTransitionForm
+from django.core.exceptions import PermissionDenied, ValidationError
+
+from .forms import (
+    FundsConfirmationForm,
+    FundsDeclineForm,
+    LocalizedAuthenticationForm,
+    MethodDeterminationForm,
+    PackagingReviewForm,
+    PlanLineForm,
+    ProcurementPlanForm,
+    ProcurementRecordForm,
+    RecordFromRequisitionForm,
+    RejectWithReasonForm,
+    RequisitionForm,
+    StatusTransitionForm,
+)
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
-from .models import ProcurementRecord, RecordFlag
-from .services import transition_status
+from .models import PlanLine, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, User
+from .permissions import role_required
+from .services import (
+    approve_plan,
+    approve_plan_line,
+    confirm_requisition_funds,
+    create_record_from_requisition,
+    decline_requisition_funds,
+    determine_requisition_method,
+    find_similar_requisitions,
+    reject_plan,
+    reject_plan_line,
+    review_requisition_packaging,
+    submit_plan,
+    submit_requisition,
+    transition_status,
+)
 
 
 class StaffLoginView(auth_views.LoginView):
@@ -161,20 +191,6 @@ def staff_record_list(request):
 
 
 @login_required
-def staff_record_create(request):
-    if request.method == 'POST':
-        form = ProcurementRecordForm(request.POST)
-        if form.is_valid():
-            record = form.save(commit=False)
-            record.created_by = request.user
-            record.save()
-            return redirect('staff_record_list')
-    else:
-        form = ProcurementRecordForm()
-    return render(request, 'staff/record_form.html', {'form': form, 'is_new': True})
-
-
-@login_required
 def staff_record_edit(request, pk):
     record = get_object_or_404(ProcurementRecord, pk=pk)
     if request.method == 'POST':
@@ -203,3 +219,250 @@ def staff_status_transition(request, pk):
     else:
         form = StatusTransitionForm(current_status=record.status)
     return render(request, 'staff/status_transition.html', {'form': form, 'record': record})
+
+
+# --- Phase 1-Foundation: annual plans -> requisitions -> funds confirmation
+# -> packaging review -> method determination -> record creation. See
+# services.py for the gate-enforcing functions these views call; views
+# themselves never write plan/requisition state directly. ---
+
+@login_required
+def staff_plan_list(request):
+    plans = ProcurementPlan.objects.select_related('law_profile', 'financial_year', 'prepared_by')
+    return render(request, 'staff/plan_list.html', {'plans': plans})
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_plan_create(request):
+    if request.method == 'POST':
+        form = ProcurementPlanForm(request.POST)
+        if form.is_valid():
+            plan = form.save(commit=False)
+            plan.prepared_by = request.user
+            plan.save()
+            return redirect('staff_plan_detail', pk=plan.pk)
+    else:
+        form = ProcurementPlanForm()
+    return render(request, 'staff/plan_form.html', {'form': form})
+
+
+@login_required
+def staff_plan_detail(request, pk):
+    plan = get_object_or_404(
+        ProcurementPlan.objects.select_related('law_profile', 'financial_year', 'prepared_by', 'approved_by'), pk=pk
+    )
+    lines = plan.lines.select_related('proposed_by').all()
+    return render(request, 'staff/plan_detail.html', {'plan': plan, 'lines': lines})
+
+
+@role_required(User.Role.REQUESTING_UNIT, User.Role.PROCUREMENT_UNIT)
+def staff_plan_line_create(request, pk):
+    plan = get_object_or_404(ProcurementPlan, pk=pk)
+    if request.method == 'POST':
+        form = PlanLineForm(request.POST)
+        if form.is_valid():
+            line = form.save(commit=False)
+            line.plan = plan
+            line.proposed_by = request.user
+            line.is_amendment = plan.status == ProcurementPlan.Status.APPROVED
+            line.save()
+            return redirect('staff_plan_detail', pk=plan.pk)
+    else:
+        form = PlanLineForm()
+    return render(request, 'staff/plan_line_form.html', {'form': form, 'plan': plan})
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_plan_submit(request, pk):
+    plan = get_object_or_404(ProcurementPlan, pk=pk)
+    if request.method == 'POST':
+        submit_plan(plan=plan, actor=request.user)
+    return redirect('staff_plan_detail', pk=plan.pk)
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_plan_approve(request, pk):
+    plan = get_object_or_404(ProcurementPlan, pk=pk)
+    error = None
+    if request.method == 'POST':
+        if 'reject' in request.POST:
+            reject_form = RejectWithReasonForm(request.POST)
+            if reject_form.is_valid():
+                try:
+                    reject_plan(plan=plan, actor=request.user, reason=reject_form.cleaned_data['reason'])
+                    return redirect('staff_plan_detail', pk=plan.pk)
+                except ValidationError as exc:
+                    error = exc.message
+        else:
+            try:
+                approve_plan(plan=plan, actor=request.user)
+                return redirect('staff_plan_detail', pk=plan.pk)
+            except ValidationError as exc:
+                error = exc.message
+    reject_form = RejectWithReasonForm()
+    return render(request, 'staff/plan_approve.html', {'plan': plan, 'reject_form': reject_form, 'error': error})
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_plan_line_approve(request, pk):
+    line = get_object_or_404(PlanLine, pk=pk)
+    error = None
+    if request.method == 'POST':
+        if 'reject' in request.POST:
+            reject_form = RejectWithReasonForm(request.POST)
+            if reject_form.is_valid():
+                try:
+                    reject_plan_line(plan_line=line, actor=request.user, reason=reject_form.cleaned_data['reason'])
+                    return redirect('staff_plan_detail', pk=line.plan_id)
+                except ValidationError as exc:
+                    error = exc.message
+        else:
+            try:
+                approve_plan_line(plan_line=line, actor=request.user)
+                return redirect('staff_plan_detail', pk=line.plan_id)
+            except ValidationError as exc:
+                error = exc.message
+    reject_form = RejectWithReasonForm()
+    return render(request, 'staff/plan_line_approve.html', {'line': line, 'reject_form': reject_form, 'error': error})
+
+
+@login_required
+def staff_requisition_list(request):
+    requisitions = Requisition.objects.select_related('plan_line', 'requested_by')
+    return render(request, 'staff/requisition_list.html', {'requisitions': requisitions})
+
+
+@role_required(User.Role.REQUESTING_UNIT, User.Role.PROCUREMENT_UNIT)
+def staff_requisition_create(request):
+    if request.method == 'POST':
+        form = RequisitionForm(request.POST)
+        if form.is_valid():
+            requisition = form.save(commit=False)
+            requisition.requested_by = request.user
+            requisition.save()
+            return redirect('staff_requisition_detail', pk=requisition.pk)
+    else:
+        form = RequisitionForm()
+    return render(request, 'staff/requisition_form.html', {'form': form})
+
+
+@login_required
+def staff_requisition_detail(request, pk):
+    requisition = get_object_or_404(
+        Requisition.objects.select_related('plan_line__plan__law_profile', 'requested_by', 'funds_confirmed_by'),
+        pk=pk,
+    )
+    record = getattr(requisition, 'record', None)
+    return render(request, 'staff/requisition_detail.html', {'requisition': requisition, 'record': record})
+
+
+@role_required(User.Role.REQUESTING_UNIT, User.Role.PROCUREMENT_UNIT)
+def staff_requisition_submit(request, pk):
+    requisition = get_object_or_404(Requisition, pk=pk)
+    error = None
+    if request.method == 'POST':
+        try:
+            submit_requisition(requisition=requisition, actor=request.user)
+            return redirect('staff_requisition_detail', pk=requisition.pk)
+        except ValidationError as exc:
+            error = exc.message
+    return render(request, 'staff/requisition_submit.html', {'requisition': requisition, 'error': error})
+
+
+@role_required(User.Role.FINANCE)
+def staff_requisition_confirm_funds(request, pk):
+    requisition = get_object_or_404(Requisition, pk=pk)
+    error = None
+    if request.method == 'POST':
+        if 'decline' in request.POST:
+            decline_form = FundsDeclineForm(request.POST)
+            if decline_form.is_valid():
+                try:
+                    decline_requisition_funds(
+                        requisition=requisition, actor=request.user, reason=decline_form.cleaned_data['reason']
+                    )
+                    return redirect('staff_requisition_detail', pk=requisition.pk)
+                except ValidationError as exc:
+                    error = exc.message
+        else:
+            form = FundsConfirmationForm(request.POST)
+            if form.is_valid():
+                try:
+                    confirm_requisition_funds(
+                        requisition=requisition, actor=request.user, note=form.cleaned_data['note']
+                    )
+                    return redirect('staff_requisition_detail', pk=requisition.pk)
+                except ValidationError as exc:
+                    error = exc.message
+    form = FundsConfirmationForm()
+    decline_form = FundsDeclineForm()
+    return render(request, 'staff/requisition_confirm_funds.html', {
+        'requisition': requisition, 'form': form, 'decline_form': decline_form, 'error': error,
+    })
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_requisition_review_packaging(request, pk):
+    requisition = get_object_or_404(Requisition, pk=pk)
+    similar = find_similar_requisitions(requisition)
+    error = None
+    if request.method == 'POST':
+        form = PackagingReviewForm(request.POST)
+        if form.is_valid():
+            try:
+                review_requisition_packaging(
+                    requisition=requisition, actor=request.user, note=form.cleaned_data['note']
+                )
+                return redirect('staff_requisition_detail', pk=requisition.pk)
+            except ValidationError as exc:
+                error = exc.message
+    else:
+        form = PackagingReviewForm()
+    return render(request, 'staff/requisition_review_packaging.html', {
+        'requisition': requisition, 'form': form, 'similar': similar, 'error': error,
+    })
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_requisition_determine_method(request, pk):
+    requisition = get_object_or_404(Requisition, pk=pk)
+    law_profile = requisition.plan_line.plan.law_profile
+    error = None
+    if request.method == 'POST':
+        form = MethodDeterminationForm(request.POST, law_profile=law_profile)
+        if form.is_valid():
+            try:
+                determine_requisition_method(
+                    requisition=requisition, actor=request.user,
+                    method_override=form.cleaned_data['method_override'],
+                    override_justification=form.cleaned_data['override_justification'],
+                )
+                return redirect('staff_requisition_detail', pk=requisition.pk)
+            except ValidationError as exc:
+                error = exc.message
+    else:
+        form = MethodDeterminationForm(law_profile=law_profile)
+    return render(request, 'staff/requisition_determine_method.html', {
+        'requisition': requisition, 'form': form, 'error': error,
+    })
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_requisition_create_record(request, pk):
+    requisition = get_object_or_404(Requisition, pk=pk)
+    error = None
+    if request.method == 'POST':
+        form = RecordFromRequisitionForm(request.POST)
+        if form.is_valid():
+            try:
+                create_record_from_requisition(
+                    requisition=requisition, actor=request.user, record_fields=form.cleaned_data
+                )
+                return redirect('staff_record_list')
+            except ValidationError as exc:
+                error = exc.message
+    else:
+        form = RecordFromRequisitionForm()
+    return render(request, 'staff/record_from_requisition_form.html', {
+        'requisition': requisition, 'form': form, 'error': error,
+    })

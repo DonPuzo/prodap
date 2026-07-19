@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Create Procurement Record from Requisition</h2>
+<p>{{ requisition.title }} — {{ requisition.determined_method }} — ₦{{ requisition.requested_value|floatformat:0 }}</p>
+<p style="color: var(--muted); font-size: .9em;">
+  Department, budget source, cost, procurement method, and law profile are taken from the
+  requisition automatically — not re-entered here.
+</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Create record</button>
+    <a class="btn btn-secondary" href="{% url 'staff_requisition_detail' requisition.id %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

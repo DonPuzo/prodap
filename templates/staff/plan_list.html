@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-hero">
+  <h2>Annual Procurement Plans</h2>
+  <a class="btn" href="{% url 'staff_plan_create' %}">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    New plan
+  </a>
+</div>
+
+{% if plans %}
+<table class="record-list">
+  <thead>
+    <tr><th>Financial Year</th><th>Law Profile</th><th>Status</th><th>Prepared By</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for plan in plans %}
+    <tr>
+      <td data-label="Financial Year">{{ plan.financial_year.label }}</td>
+      <td data-label="Law Profile">{{ plan.law_profile.governing_law }}</td>
+      <td data-label="Status"><span class="badge badge-{{ plan.status }}">{{ plan.get_status_display }}</span></td>
+      <td data-label="Prepared By">{{ plan.prepared_by.username }}</td>
+      <td data-label=""><a class="btn btn-secondary" href="{% url 'staff_plan_detail' plan.id %}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state"><p>No procurement plans yet.</p></div>
+{% endif %}
+{% endblock %}

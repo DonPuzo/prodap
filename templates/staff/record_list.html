@@ -3,11 +3,16 @@
 {% block content %}
 <div class="detail-hero">
   <h2>Procurement Records</h2>
-  <a class="btn" href="{% url 'staff_record_create' %}">
+  <a class="btn" href="{% url 'staff_requisition_list' %}">
     <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-    New record
+    Requisitions
   </a>
 </div>
+<p style="color: var(--muted); font-size: .9em; margin-top: -0.5rem;">
+  New records are created from a funded, reviewed requisition — see
+  <a href="{% url 'staff_plan_list' %}">Annual Plans</a> and
+  <a href="{% url 'staff_requisition_list' %}">Requisitions</a>.
+</p>
 
 {% if records %}
 <table class="record-list">

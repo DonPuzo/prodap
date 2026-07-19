@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Determine Procurement Method: {{ requisition.title }}</h2>
+<p>Requested value: <strong>₦{{ requisition.requested_value|floatformat:0 }}</strong> — the default method and approving authority are looked up from the current versioned threshold rules for this value.</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Determine method</button>
+  </form>
+</div>
+{% endblock %}

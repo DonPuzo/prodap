@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Add Plan Line: {{ plan.financial_year.label }}</h2>
+{% if plan.status == 'approved' %}
+<p style="color: var(--muted);">This plan is already approved — this line will be added as an amendment and needs its own approval before a requisition can use it.</p>
+{% endif %}
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Save</button>
+    <a class="btn btn-secondary" href="{% url 'staff_plan_detail' plan.id %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

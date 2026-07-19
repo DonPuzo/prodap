@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-hero">
+  <h2>Procurement Plan: {{ plan.financial_year.label }}</h2>
+  <span class="badge badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
+</div>
+
+<div class="detail-grid">
+  <div class="field"><div class="label">Law Profile</div><div class="val">{{ plan.law_profile.governing_law }}</div></div>
+  <div class="field"><div class="label">Prepared By</div><div class="val">{{ plan.prepared_by.username }}</div></div>
+  {% if plan.approved_by %}
+  <div class="field"><div class="label">Approved By</div><div class="val">{{ plan.approved_by.username }}</div></div>
+  {% endif %}
+</div>
+
+{% if plan.status == 'rejected' and plan.rejected_reason %}
+<div class="message message-error">Rejected: {{ plan.rejected_reason }}</div>
+{% endif %}
+
+<div class="actions-row">
+  {% if plan.status == 'draft' %}
+    <a class="btn btn-secondary" href="{% url 'staff_plan_line_create' plan.id %}">+ Add plan line</a>
+    <form method="post" action="{% url 'staff_plan_submit' plan.id %}" style="display:inline;">
+      {% csrf_token %}
+      <button class="btn" type="submit">Submit for approval</button>
+    </form>
+  {% elif plan.status == 'submitted' %}
+    <a class="btn" href="{% url 'staff_plan_approve' plan.id %}">Review for approval</a>
+  {% elif plan.status == 'approved' %}
+    <a class="btn btn-secondary" href="{% url 'staff_plan_line_create' plan.id %}">+ Add amendment line</a>
+  {% endif %}
+</div>
+
+<h3>Plan Lines</h3>
+{% if lines %}
+<table class="record-list">
+  <thead>
+    <tr><th>Item</th><th>{{ ui.department }}</th><th>Est. Cost</th><th>Status</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for line in lines %}
+    <tr>
+      <td data-label="Item">{{ line.item_description }}{% if line.is_amendment %} <em>(amendment)</em>{% endif %}</td>
+      <td data-label="{{ ui.department }}">{{ line.department }}</td>
+      <td data-label="Est. Cost">₦{{ line.estimated_cost|floatformat:0 }}</td>
+      <td data-label="Status"><span class="badge badge-{{ line.status }}">{{ line.get_status_display }}</span></td>
+      <td data-label="">
+        {% if line.status == 'pending' %}
+          <a class="btn btn-secondary" href="{% url 'staff_plan_line_approve' line.id %}">Review</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state"><p>No plan lines yet.</p></div>
+{% endif %}
+{% endblock %}

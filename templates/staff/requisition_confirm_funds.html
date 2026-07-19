@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Confirm Funds: {{ requisition.title }}</h2>
+<p>Requested value: <strong>₦{{ requisition.requested_value|floatformat:0 }}</strong> — {{ requisition.department }}</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Confirm funds available</button>
+  </form>
+</div>
+
+<div class="form-card" style="margin-top: var(--space-4);">
+  <form method="post">
+    {% csrf_token %}
+    {{ decline_form.as_p }}
+    <button class="btn btn-flag" type="submit" name="decline" value="1">Decline — funds not available</button>
+  </form>
+</div>
+{% endblock %}

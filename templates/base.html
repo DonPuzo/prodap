@@ -27,7 +27,10 @@
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>
         {{ user.username }}
       </a>
-      <a href="{% url 'staff_logout' %}">Log out</a>
+      <form method="post" action="{% url 'staff_logout' %}" style="display: inline;">
+        {% csrf_token %}
+        <button type="submit">Log out</button>
+      </form>
     {% else %}
       <a href="{% url 'staff_login' %}">
         <svg class="icon" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
@@ -35,6 +38,13 @@
       </a>
     {% endif %}
   </div>
+  {% if user.is_authenticated %}
+  <div class="a11y-bar staff-nav" aria-label="Staff navigation">
+    <a href="{% url 'staff_record_list' %}">Records</a>
+    <a href="{% url 'staff_plan_list' %}">Annual Plans</a>
+    <a href="{% url 'staff_requisition_list' %}">Requisitions</a>
+  </div>
+  {% endif %}
   <header class="site-header">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">P</span>

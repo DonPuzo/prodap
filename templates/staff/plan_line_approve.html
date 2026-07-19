@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Review Plan Line: {{ line.item_description }}</h2>
+<div class="detail-grid">
+  <div class="field"><div class="label">{{ ui.department }}</div><div class="val">{{ line.department }}</div></div>
+  <div class="field"><div class="label">Est. Cost</div><div class="val">₦{{ line.estimated_cost|floatformat:0 }}</div></div>
+  <div class="field"><div class="label">Proposed By</div><div class="val">{{ line.proposed_by.username }}</div></div>
+</div>
+<p>{{ line.justification }}</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    <button class="btn" type="submit">Approve line</button>
+  </form>
+</div>
+
+<div class="form-card" style="margin-top: var(--space-4);">
+  <form method="post">
+    {% csrf_token %}
+    {{ reject_form.as_p }}
+    <button class="btn btn-flag" type="submit" name="reject" value="1">Reject line</button>
+  </form>
+</div>
+{% endblock %}

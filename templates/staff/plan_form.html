@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>New Annual Procurement Plan</h2>
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Create</button>
+    <a class="btn btn-secondary" href="{% url 'staff_plan_list' %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

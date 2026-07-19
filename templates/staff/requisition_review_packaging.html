@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Packaging / Anti-Splitting Review: {{ requisition.title }}</h2>
+
+{% if similar %}
+<div class="flag-box">
+  <h3>Similar recent requisitions ({{ requisition.department }}, last 90 days)</h3>
+  <ul class="timeline">
+    {% for s in similar %}
+    <li>
+      <div class="transition">{{ s.title }}</div>
+      <div class="when">₦{{ s.requested_value|floatformat:0 }} — {{ s.created_at|date:"Y-m-d" }} — {{ s.get_status_display }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  <p style="color: var(--muted); font-size: .85em;">Informational only — use this to judge whether this requisition looks like it's been split to dodge a threshold.</p>
+</div>
+{% else %}
+<p style="color: var(--muted);">No similar recent requisitions found for this department.</p>
+{% endif %}
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Record review decision</button>
+  </form>
+</div>
+{% endblock %}

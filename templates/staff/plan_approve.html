@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Review Plan: {{ plan.financial_year.label }}</h2>
+<p>Prepared by <strong>{{ plan.prepared_by.username }}</strong> — {{ plan.lines.count }} line(s).</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    <p>Approving this plan bulk-approves all its pending (non-amendment) lines.</p>
+    <button class="btn" type="submit">Approve plan</button>
+  </form>
+</div>
+
+<div class="form-card" style="margin-top: var(--space-4);">
+  <form method="post">
+    {% csrf_token %}
+    {{ reject_form.as_p }}
+    <button class="btn btn-flag" type="submit" name="reject" value="1">Reject plan</button>
+  </form>
+</div>
+{% endblock %}
