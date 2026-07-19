@@ -1,16 +1,27 @@
 import csv
 
 from django.contrib import messages
+from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import ProcurementRecordForm, StatusTransitionForm
-from .i18n import STRINGS
+from .forms import LocalizedAuthenticationForm, ProcurementRecordForm, StatusTransitionForm
+from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import ProcurementRecord, RecordFlag
 from .services import transition_status
+
+
+class StaffLoginView(auth_views.LoginView):
+    template_name = 'staff/login.html'
+    authentication_form = LocalizedAuthenticationForm
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['lang'] = self.request.session.get('lang', DEFAULT_LANG)
+        return kwargs
 
 
 def set_lang(request, lang_code):
@@ -81,15 +92,16 @@ def flag_record(request, pk):
     to keep the count meaningful without building real rate-limiting
     (build prompt v2 Phase 2 item 1 — deliberately minimal)."""
     record = get_object_or_404(ProcurementRecord, pk=pk)
+    ui = get_strings(request.session.get('lang', DEFAULT_LANG))
     if request.method == 'POST':
         flagged_session = request.session.get('flagged_records', [])
         if str(record.id) not in flagged_session:
             RecordFlag.objects.create(record=record, note=request.POST.get('note', '').strip())
             flagged_session.append(str(record.id))
             request.session['flagged_records'] = flagged_session
-            messages.success(request, 'Thank you — this project has been flagged for public scrutiny.')
+            messages.success(request, ui['flag_success_message'])
         else:
-            messages.info(request, "You've already flagged this project from this browser.")
+            messages.info(request, ui['already_flagged'])
     return redirect('public_record_detail', pk=record.id)
 
 

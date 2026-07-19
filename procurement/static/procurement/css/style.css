@@ -181,7 +181,13 @@ header.site-header .tagline { color: var(--muted); margin: .2rem 0 0; }
   font: inherit;
 }
 .filters input { flex: 1; width: 100%; }
-.filters select { flex: 1 1 160px; }
+.filters select {
+  flex: 1 1 190px;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
 
 /* ---------- Record list: table on wide screens, cards on narrow ---------- */
 table.record-list { width: 100%; border-collapse: collapse; margin: var(--space-4) 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
@@ -318,6 +324,14 @@ form input, form select, form textarea {
 form textarea { resize: vertical; }
 .helptext { color: var(--muted); font-size: .8em; display: block; margin-top: .25rem; }
 ul.errorlist { color: #d1332f; list-style: none; padding: 0; margin: .25rem 0 0; font-size: .85em; }
+ul.errorlist.nonfield {
+  padding: .7rem 1rem;
+  margin: 0 0 var(--space-3);
+  background: #fdecea;
+  border: 1px solid #f3c0bd;
+  border-radius: var(--radius-sm);
+}
+ul.errorlist.nonfield li { margin: 0; }
 
 .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-5); max-width: 640px; box-shadow: var(--shadow-sm); }
 

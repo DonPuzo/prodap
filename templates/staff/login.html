@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="form-card" style="margin: var(--space-5) auto;">
-  <h2>Procurement Office Login</h2>
+  <h2>{{ ui.staff_login_heading }}</h2>
   <form method="post">
     {% csrf_token %}
     {{ form.as_p }}
-    <button class="btn" type="submit">Log in</button>
+    <button class="btn" type="submit">{{ ui.login_button }}</button>
   </form>
 </div>
 {% endblock %}

@@ -1,6 +1,25 @@
 from django import forms
+from django.contrib.auth.forms import AuthenticationForm
 
+from .i18n import DEFAULT_LANG, get_strings
 from .models import LawProfile, ProcurementRecord
+
+
+class LocalizedAuthenticationForm(AuthenticationForm):
+    """Same login form Django ships, with labels and the invalid-login
+    error pulled from our EN/Pidgin dict — the login page is reachable
+    straight from the public toolbar, so it shouldn't drop out of
+    whichever language the visitor picked (build prompt v2 section 7B)."""
+
+    def __init__(self, *args, lang=DEFAULT_LANG, **kwargs):
+        super().__init__(*args, **kwargs)
+        strings = get_strings(lang)
+        self.fields['username'].label = strings['username_label']
+        self.fields['password'].label = strings['password_label']
+        if lang == 'pcm':
+            self.error_messages['invalid_login'] = (
+                'Di username or password no correct. Both fields fit dey case-sensitive.'
+            )
 
 
 class ProcurementRecordForm(forms.ModelForm):

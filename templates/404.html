@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Page not found — {{ tenant_name }}{% endblock %}
+{% block content %}
+<div class="empty-state" style="margin-top: var(--space-5);">
+  <svg class="icon" viewBox="0 0 24 24" style="width: 2.2rem; height: 2.2rem;"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+  <p><strong>Page not found.</strong></p>
+  <p>The page you're looking for doesn't exist, or the link may be out of date.</p>
+  <p><a href="{% url 'public_dashboard' %}">&laquo; {{ ui.back_to_dashboard }}</a></p>
+</div>
+{% endblock %}

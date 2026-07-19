@@ -13,7 +13,7 @@ urlpatterns = [
     path('set-lang/<str:lang_code>/', views.set_lang, name='set_lang'),
 
     # Procurement office backend — login required.
-    path('staff/login/', auth_views.LoginView.as_view(template_name='staff/login.html'), name='staff_login'),
+    path('staff/login/', views.StaffLoginView.as_view(), name='staff_login'),
     path('staff/logout/', auth_views.LogoutView.as_view(), name='staff_logout'),
     path('staff/records/', views.staff_record_list, name='staff_record_list'),
     path('staff/records/new/', views.staff_record_create, name='staff_record_create'),
