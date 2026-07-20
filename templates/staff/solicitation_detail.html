@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="detail-hero">
+  <h2>Solicitation v{{ solicitation.version }}: {{ record.title }}</h2>
+  <span class="badge badge-{{ solicitation.status }}">{{ solicitation.get_status_display }}</span>
+</div>
+
+<div class="detail-grid">
+  <div class="field"><div class="label">Eligibility criteria</div><div class="val">{{ solicitation.eligibility_criteria }}</div></div>
+  <div class="field"><div class="label">Scope / specifications</div><div class="val">{{ solicitation.scope_and_specifications }}</div></div>
+  <div class="field"><div class="label">Evaluation criteria</div><div class="val">{{ solicitation.evaluation_criteria }}</div></div>
+  {% if solicitation.bid_security_required %}
+  <div class="field"><div class="label">Bid security</div><div class="val">{{ solicitation.bid_security_type }} — ₦{{ solicitation.bid_security_amount|floatformat:0 }}</div></div>
+  {% endif %}
+  <div class="field"><div class="label">Prepared by</div><div class="val">{{ solicitation.prepared_by.username }}</div></div>
+  {% if solicitation.approved_by %}
+  <div class="field"><div class="label">Approved by</div><div class="val">{{ solicitation.approved_by.username }}</div></div>
+  {% endif %}
+  {% if solicitation.rejected_reason %}
+  <div class="field"><div class="label">Rejection reason</div><div class="val">{{ solicitation.rejected_reason }}</div></div>
+  {% endif %}
+</div>
+
+<div class="actions-row">
+  {% if solicitation.status == 'draft' %}
+    <a class="btn" href="{% url 'staff_solicitation_approve' solicitation.id %}">Approve / reject</a>
+  {% elif solicitation.status == 'approved' and not advertisement %}
+    <a class="btn" href="{% url 'staff_advertisement_publish' solicitation.id %}">Publish advertisement</a>
+  {% endif %}
+  <a class="btn btn-secondary" href="{% url 'staff_record_detail' record.id %}">Back to record</a>
+</div>
+
+{% if advertisement %}
+<h3 style="margin-top: var(--space-4);">Advertisement</h3>
+<div class="detail-grid">
+  <div class="field"><div class="label">Published by</div><div class="val">{{ advertisement.published_by.username }}</div></div>
+  <div class="field"><div class="label">Published at</div><div class="val">{{ advertisement.published_at }}</div></div>
+  <div class="field"><div class="label">Closing date</div><div class="val">{{ advertisement.closing_date }}</div></div>
+  <div class="field"><div class="label">Channels</div><div class="val">{{ advertisement.channels|join:", " }}</div></div>
+  <div class="field"><div class="label">Publication proof</div><div class="val">{{ advertisement.publication_proof }}</div></div>
+</div>
+{% endif %}
+{% endblock %}

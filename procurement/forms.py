@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm
 
 from .i18n import DEFAULT_LANG, get_strings
-from .models import LawProfile, PlanLine, ProcurementPlan, ProcurementRecord, Requisition
+from .models import Advertisement, LawProfile, PlanLine, ProcurementPlan, ProcurementRecord, Requisition, Solicitation
 
 
 class LocalizedAuthenticationForm(AuthenticationForm):
@@ -86,7 +86,13 @@ class StatusTransitionForm(forms.Form):
 
     def __init__(self, *args, current_status=None, **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [c for c in ProcurementRecord.Status.choices if c[0] != current_status]
+        excluded = {current_status}
+        if current_status == ProcurementRecord.Status.PLANNING:
+            # Planning -> Advertised is now evidence-derived (see
+            # services.publish_advertisement) — not a free manual pick, for
+            # any record, legacy or Foundation-phase (Phase 2 slice).
+            excluded.add(ProcurementRecord.Status.ADVERTISED)
+        choices = [c for c in ProcurementRecord.Status.choices if c[0] not in excluded]
         self.fields['new_status'].choices = choices
 
 
@@ -198,3 +204,53 @@ class RecordFromRequisitionForm(forms.ModelForm):
 
 class RejectWithReasonForm(forms.Form):
     reason = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)
+
+
+# --- Phase 2 (non-cryptographic slice): solicitation -> advertisement ---
+
+class SolicitationForm(forms.ModelForm):
+    technical_weight_pct = forms.IntegerField(
+        required=False, min_value=0, max_value=100, label='Technical weight (%)'
+    )
+    financial_weight_pct = forms.IntegerField(
+        required=False, min_value=0, max_value=100, label='Financial weight (%)'
+    )
+
+    class Meta:
+        model = Solicitation
+        fields = [
+            'eligibility_criteria', 'scope_and_specifications', 'evaluation_criteria',
+            'bid_security_required', 'bid_security_type', 'bid_security_amount',
+        ]
+        widgets = {
+            'eligibility_criteria': forms.Textarea(attrs={'rows': 4}),
+            'scope_and_specifications': forms.Textarea(attrs={'rows': 6}),
+            'evaluation_criteria': forms.Textarea(attrs={'rows': 4}),
+        }
+
+    def clean(self):
+        cleaned = super().clean()
+        tech, fin = cleaned.get('technical_weight_pct'), cleaned.get('financial_weight_pct')
+        if tech is not None and fin is not None and tech + fin != 100:
+            self.add_error('financial_weight_pct', 'Technical and financial weights must sum to 100.')
+        cleaned['evaluation_weights'] = (
+            {'technical': tech, 'financial': fin} if (tech is not None or fin is not None) else {}
+        )
+        if cleaned.get('bid_security_required') and not cleaned.get('bid_security_amount'):
+            self.add_error('bid_security_amount', 'Required when bid security is required.')
+        return cleaned
+
+    def solicitation_fields(self):
+        """The subset of cleaned_data that maps onto Solicitation model
+        fields — strips the two helper weight inputs, which are folded into
+        evaluation_weights above (see services.prepare_solicitation)."""
+        return {
+            k: v for k, v in self.cleaned_data.items()
+            if k not in ('technical_weight_pct', 'financial_weight_pct')
+        }
+
+
+class AdvertisementForm(forms.Form):
+    channels = forms.MultipleChoiceField(choices=Advertisement.CHANNEL_CHOICES, widget=forms.CheckboxSelectMultiple)
+    publication_proof = forms.CharField(widget=forms.Textarea(attrs={'rows': 4}))
+    closing_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))

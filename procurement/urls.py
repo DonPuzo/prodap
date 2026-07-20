@@ -48,4 +48,20 @@ urlpatterns = [
         'staff/requisitions/<uuid:pk>/create-record/',
         views.staff_requisition_create_record, name='staff_requisition_create_record',
     ),
+
+    # Phase 2 (non-cryptographic slice): solicitation preparation -> advertisement/publication.
+    path('staff/records/<uuid:pk>/detail/', views.staff_record_detail, name='staff_record_detail'),
+    path(
+        'staff/records/<uuid:pk>/solicitations/new/',
+        views.staff_solicitation_create, name='staff_solicitation_create',
+    ),
+    path('staff/solicitations/<uuid:pk>/', views.staff_solicitation_detail, name='staff_solicitation_detail'),
+    path(
+        'staff/solicitations/<uuid:pk>/approve/',
+        views.staff_solicitation_approve, name='staff_solicitation_approve',
+    ),
+    path(
+        'staff/solicitations/<uuid:pk>/publish/',
+        views.staff_advertisement_publish, name='staff_advertisement_publish',
+    ),
 ]

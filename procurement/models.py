@@ -37,6 +37,18 @@ class LawProfile(models.Model):
     regulating_body = models.CharField(max_length=255)
     procurement_methods = models.JSONField(default=list)
     approval_thresholds = models.JSONField(default=list)
+    default_minimum_bidding_days = models.PositiveIntegerField(
+        default=14,
+        help_text=(
+            'Institutional policy default: minimum number of days required between '
+            'advertisement publication and bid closing. This is a configurable placeholder, '
+            'NOT a verified statutory figure for any specific procurement method — the source '
+            'framework gives illustrative examples (e.g. "at least 30 days for consultancy '
+            'proposals") but no complete table the way it does for approval thresholds. '
+            'Adjust per institution/legal review; a future increment could branch this per '
+            'procurement_method once an authoritative table is available.'
+        ),
+    )
 
     def __str__(self):
         return self.governing_law
@@ -447,6 +459,10 @@ class AuditEvent(models.Model):
         METHOD_DETERMINED = 'method_determined', 'Method Determined'
         METHOD_OVERRIDDEN = 'method_overridden', 'Method Overridden'
         RECORD_CREATED_FROM_REQUISITION = 'record_created_from_requisition', 'Record Created From Requisition'
+        SOLICITATION_PREPARED = 'solicitation_prepared', 'Solicitation Prepared'
+        SOLICITATION_APPROVED = 'solicitation_approved', 'Solicitation Approved'
+        SOLICITATION_REJECTED = 'solicitation_rejected', 'Solicitation Rejected'
+        ADVERTISEMENT_PUBLISHED = 'advertisement_published', 'Advertisement Published'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -466,3 +482,128 @@ class AuditEvent(models.Model):
 
     def __str__(self):
         return f'{self.action} by {self.actor_id} at {self.created_at:%Y-%m-%d %H:%M}'
+
+
+# --- Phase 2 (non-cryptographic slice): solicitation preparation -> advertisement/publication. ---
+# Prequalification/EOI and clarifications/addenda are NOT built here — the natural
+# extension point for both is an FK to Solicitation, added later without restructuring
+# this. The encrypted bid submission/opening system is entirely separate future work.
+
+
+class Solicitation(models.Model):
+    """The SBD/RFP document for a ProcurementRecord (integration framework
+    step 06). FK, not OneToOne — a rejected solicitation is superseded by a
+    new version rather than mutated in place (append-only history, matching
+    ThresholdRule's "never mutate, add a new row" discipline). Hangs off
+    ProcurementRecord directly (not Requisition) so it also works for
+    pre-Foundation legacy records that have requisition=None.
+
+    Deliberately does not duplicate procurement_method or
+    bpp_prior_review_required — those are read live off record.procurement_method
+    (an immutable snapshot taken at record-creation time) and the
+    bpp_prior_review_required property below, since re-copying them here would
+    only add a staleness risk for no benefit."""
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    record = models.ForeignKey(ProcurementRecord, on_delete=models.PROTECT, related_name='solicitations')
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+
+    eligibility_criteria = models.TextField(
+        help_text='Who may bid: registration, category, experience requirements.'
+    )
+    scope_and_specifications = models.TextField(
+        help_text='Technical specifications / scope of work / terms of reference.'
+    )
+    evaluation_criteria = models.TextField(help_text='Narrative evaluation methodology.')
+    evaluation_weights = models.JSONField(
+        default=dict, blank=True,
+        help_text=(
+            'Optional structured weights, e.g. {"technical": 70, "financial": 30}. '
+            'Informational only — automated scoring is a future evaluation phase, not built yet.'
+        ),
+    )
+    bid_security_required = models.BooleanField(default=False)
+    bid_security_type = models.CharField(max_length=100, blank=True, help_text='e.g. Bank guarantee, insurance bond.')
+    bid_security_amount = models.DecimalField(max_digits=16, decimal_places=2, null=True, blank=True)
+
+    prepared_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='solicitations_prepared'
+    )
+    prepared_at = models.DateTimeField(auto_now_add=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='solicitations_approved',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_reason = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-version']
+        unique_together = [('record', 'version')]
+
+    def clean(self):
+        if self.bid_security_required and self.bid_security_amount is None:
+            raise ValidationError({'bid_security_amount': 'Required when bid security is required.'})
+
+    @property
+    def bpp_prior_review_required(self):
+        """None means "not tracked" — e.g. for a legacy record with no requisition."""
+        requisition = self.record.requisition
+        return requisition.bpp_prior_review_required if requisition else None
+
+    def __str__(self):
+        return f'{self.record.title} — Solicitation v{self.version} ({self.status})'
+
+
+class Advertisement(models.Model):
+    """The publication record for an approved Solicitation (integration
+    framework step 07, publication half only — prequalification/EOI is
+    explicitly future work). OneToOne on Solicitation: one publish event per
+    approved solicitation version; re-advertisement (a solicitation that
+    fails to attract bidders) would need a new Solicitation version plus a
+    fresh Advertisement — no dedicated re-advertise flow exists yet."""
+
+    CHANNEL_CHOICES = [
+        ('newspaper', 'National Newspaper'),
+        ('institution_website', 'Institution Website'),
+        ('institution_notice_board', 'Institution Notice Board'),
+        ('bpp_portal', 'BPP / National Procurement Portal'),
+        ('other', 'Other (see publication proof)'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    solicitation = models.OneToOneField(Solicitation, on_delete=models.PROTECT, related_name='advertisement')
+    channels = models.JSONField(default=list, help_text='List of channel codes — see Advertisement.CHANNEL_CHOICES.')
+    publication_proof = models.TextField(
+        help_text='Reference/description of proof of publication (newspaper name+date, URL, notice-board photo reference, etc).'
+    )
+    closing_date = models.DateField(help_text='Bid/proposal submission deadline.')
+    minimum_bidding_days_applied = models.PositiveIntegerField(
+        help_text=(
+            'Snapshot of the institutional minimum-bidding-period policy in effect at publish '
+            'time (see LawProfile.default_minimum_bidding_days) — kept even if the policy '
+            'default later changes, so historical records stay explainable.'
+        ),
+    )
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='advertisements_published'
+    )
+    published_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        if not self.channels:
+            raise ValidationError({'channels': 'At least one publication channel is required.'})
+        valid_codes = dict(self.CHANNEL_CHOICES)
+        bad = [c for c in self.channels if c not in valid_codes]
+        if bad:
+            raise ValidationError({'channels': f'Unrecognized channel(s): {", ".join(bad)}.'})
+
+    def __str__(self):
+        return f'Advertisement for {self.solicitation.record.title} (closes {self.closing_date})'

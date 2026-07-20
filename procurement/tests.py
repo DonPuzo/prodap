@@ -6,6 +6,7 @@ from django.urls import reverse
 
 from .forms import ProcurementRecordForm, RequisitionForm
 from .models import (
+    Advertisement,
     AuditEvent,
     FinancialYear,
     PlanLine,
@@ -13,6 +14,7 @@ from .models import (
     ProcurementRecord,
     RecordFlag,
     Requisition,
+    Solicitation,
     StatusUpdate,
     ThresholdRule,
     User,
@@ -22,13 +24,18 @@ from .services import (
     SeparationOfDutiesError,
     approve_plan,
     approve_plan_line,
+    approve_solicitation,
     confirm_requisition_funds,
     create_record_from_requisition,
     determine_default_method,
     determine_requisition_method,
     get_approving_authority,
+    get_current_solicitation,
+    prepare_solicitation,
+    publish_advertisement,
     reject_plan,
     reject_plan_line,
+    reject_solicitation,
     review_requisition_packaging,
     submit_plan,
     submit_requisition,
@@ -538,13 +545,26 @@ class LegacyDataCompatibilityTests(TestCase):
         self.assertEqual(self.record.title, 'Updated Title')
 
     def test_legacy_record_status_transition_still_works(self):
+        """Planning -> Advertised specifically now requires
+        publish_advertisement (see StatusTransitionForm) — every OTHER
+        transition, including for legacy no-requisition records, is
+        untouched by that change (Phase 2 non-cryptographic slice)."""
         self.client.force_login(self.actor)
         response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
-            'new_status': 'Advertised', 'note': 'Moving forward',
+            'new_status': 'Abandoned', 'note': 'Moving forward',
         })
         self.assertEqual(response.status_code, 302)
         self.record.refresh_from_db()
-        self.assertEqual(self.record.status, 'Advertised')
+        self.assertEqual(self.record.status, 'Abandoned')
+
+    def test_planning_to_advertised_no_longer_manually_selectable(self):
+        self.client.force_login(self.actor)
+        response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
+            'new_status': 'Advertised', 'note': 'Attempted manual bypass',
+        })
+        self.assertEqual(response.status_code, 200)  # form re-rendered with error, not redirected
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'Planning')  # unchanged
 
 
 class AuditEventTests(TestCase):
@@ -692,3 +712,192 @@ class RequisitionValueValidationTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         requisition = form.save(commit=False)
         self.assertEqual(requisition.department, 'Bursary')
+
+
+# --- Phase 2 (non-cryptographic slice): solicitation preparation ->
+# advertisement/publication. ---
+
+SOLICITATION_FIELDS = dict(
+    eligibility_criteria='Must be registered with BPP.',
+    scope_and_specifications='Supply and install 50 office chairs.',
+    evaluation_criteria='Lowest evaluated responsive bid.',
+    evaluation_weights={},
+    bid_security_required=False,
+    bid_security_type='',
+    bid_security_amount=None,
+)
+
+
+class SolicitationAdvertisementTests(TestCase):
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_sol', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_sol', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_sol', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_sol', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+    def test_prepare_solicitation_requires_planning_status(self):
+        transition_status(record=self.record, new_status='Abandoned', updated_by=self.preparer)
+        with self.assertRaises(ValidationError):
+            prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+
+    def test_approve_solicitation_separation_of_duties(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        with self.assertRaises(SeparationOfDutiesError):
+            approve_solicitation(solicitation=solicitation, actor=self.preparer)
+
+    def test_reject_then_reprepare_creates_new_version(self):
+        v1 = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        reject_solicitation(solicitation=v1, actor=self.approver, reason='Needs clearer specifications.')
+        v2 = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        self.assertEqual(v2.version, 2)
+        self.assertEqual(self.record.solicitations.count(), 2)
+        self.assertEqual(get_current_solicitation(self.record), v2)
+
+    def test_publish_advertisement_enforces_minimum_bidding_days(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        too_soon = datetime.date.today() + datetime.timedelta(days=1)
+        with self.assertRaises(ValidationError):
+            publish_advertisement(
+                solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+                publication_proof='Posted on website.', closing_date=too_soon,
+            )
+
+    def test_publish_advertisement_rejects_unapproved_solicitation(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        closing = datetime.date.today() + datetime.timedelta(days=30)
+        with self.assertRaises(ValidationError):
+            publish_advertisement(
+                solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+                publication_proof='Posted.', closing_date=closing,
+            )
+
+    def test_publish_advertisement_is_idempotent_guard(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        closing = datetime.date.today() + datetime.timedelta(days=30)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=closing,
+        )
+        with self.assertRaises(ValidationError):
+            publish_advertisement(
+                solicitation=solicitation, actor=self.preparer, channels=['newspaper'],
+                publication_proof='Posted again.', closing_date=closing,
+            )
+
+    def test_full_happy_path_solicitation_to_advertised(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        closing = datetime.date.today() + datetime.timedelta(days=30)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website', 'newspaper'],
+            publication_proof='Posted on website and Daily Times, 2026-07-20.', closing_date=closing,
+        )
+
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, ProcurementRecord.Status.ADVERTISED)
+
+        status_updates = StatusUpdate.objects.filter(record=self.record)
+        self.assertEqual(status_updates.count(), 1)
+        self.assertEqual(status_updates.first().old_status, 'Planning')
+        self.assertEqual(status_updates.first().new_status, 'Advertised')
+
+        sol_events = set(AuditEvent.objects.filter(
+            content_type__model='solicitation', object_id=solicitation.id
+        ).values_list('action', flat=True))
+        self.assertIn(AuditEvent.Action.SOLICITATION_PREPARED, sol_events)
+        self.assertIn(AuditEvent.Action.SOLICITATION_APPROVED, sol_events)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='advertisement', action=AuditEvent.Action.ADVERTISEMENT_PUBLISHED
+            ).exists()
+        )
+
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, SOLICITATION_FIELDS['eligibility_criteria'])
+        self.assertContains(response, str(closing))
+
+
+class SolicitationViewRoleGateTests(TestCase):
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.actor = User.objects.create_user(username='pu_solview', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.wrong_role = User.objects.create_user(username='ru_solview', password='x', role=User.Role.REQUESTING_UNIT)
+        self.record = make_record(self.law_profile, self.actor)
+        self.client = Client()
+
+    def test_solicitation_create_rejects_wrong_role(self):
+        self.client.force_login(self.wrong_role)
+        response = self.client.get(reverse('staff_solicitation_create', args=[self.record.id]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_solicitation_create_allows_procurement_unit(self):
+        self.client.force_login(self.actor)
+        response = self.client.get(reverse('staff_solicitation_create', args=[self.record.id]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_solicitation_approve_rejects_wrong_role(self):
+        solicitation = Solicitation.objects.create(prepared_by=self.actor, record=self.record, **SOLICITATION_FIELDS)
+        self.client.force_login(self.wrong_role)
+        response = self.client.get(reverse('staff_solicitation_approve', args=[solicitation.id]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_superuser_bypasses_role_check(self):
+        admin = User.objects.create_superuser(username='admin_solview', password='x', role=User.Role.ADMIN)
+        self.client.force_login(admin)
+        response = self.client.get(reverse('staff_solicitation_create', args=[self.record.id]))
+        self.assertEqual(response.status_code, 200)
+
+
+class SolicitationAdminLockdownTests(TestCase):
+    """Every field on Solicitation/Advertisement is either service-written-
+    once or must stay immutable post-approval/publish — no legitimate
+    post-creation admin edit path exists for either (see admin.py)."""
+
+    def test_solicitation_admin_has_no_add_permission(self):
+        from .admin import SolicitationAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = SolicitationAdmin(Solicitation, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Solicitation._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_advertisement_admin_has_no_add_permission(self):
+        from .admin import AdvertisementAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = AdvertisementAdmin(Advertisement, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Advertisement._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)

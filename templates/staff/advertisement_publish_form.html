@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Publish Advertisement: {{ solicitation.record.title }}</h2>
+<p style="color: var(--muted); font-size: .9em;">
+  Publishing moves this record from Planning to Advertised. The closing date must respect
+  the institution's minimum bidding period ({{ solicitation.record.law_profile.default_minimum_bidding_days }} days).
+</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Publish advertisement</button>
+    <a class="btn btn-secondary" href="{% url 'staff_solicitation_detail' solicitation.id %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

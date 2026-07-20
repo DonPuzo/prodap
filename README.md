@@ -200,13 +200,47 @@ can no longer be created out of thin air.
   existing `StatusUpdate` trail rather than merging them, since
   `StatusUpdate` already does its one job correctly.
 
-**Explicitly not yet built** (Phases 2–5 of the same blueprint): encrypted
-electronic bid submission/opening, evaluation committees, Tenders Board
-approval routing, BPP Certificate of No Objection, contract/milestone/
-payment management, NOCOPO/OCDS export, audit analytics. Record `status`
-(Advertised → Completed) still transitions manually via the existing
-staff status-transition screen — evidence-gating those states isn't
-honestly buildable until the evaluation/approval machinery above exists.
+## What's implemented (blueprint Phase 2 — Competition, non-cryptographic slice)
+
+The first piece of the blueprint's Competition phase: a `ProcurementRecord`
+can no longer be manually flipped from `Planning` to `Advertised` with
+nothing but a text note. That transition is now evidence-derived.
+
+- **Solicitation preparation**: a `Solicitation` (eligibility criteria,
+  scope/specifications, evaluation criteria, optional bid-security
+  requirement) prepared by the Procurement Unit for a record still in
+  `Planning`, versioned and append-only — a rejected solicitation is
+  superseded by a new version, never mutated.
+- **Solicitation approval, with separation of duties**: the Accounting
+  Officer approves or rejects — the preparer cannot approve their own
+  solicitation, same enforcement pattern as plan/requisition approval.
+- **Advertisement/publication**: publishing an approved solicitation
+  (channels used, publication proof, closing date) is what actually moves
+  the record to `Advertised`, inside the same transaction as the existing
+  `transition_status()` call — so `StatusUpdate` stays the single source of
+  truth for status history. The closing date must respect a configurable
+  institutional minimum bidding period (`LawProfile.
+  default_minimum_bidding_days`) — explicitly documented as a policy
+  placeholder, not a verified statutory day-count, since the source
+  blueprint doesn't supply a complete method-by-method table the way it
+  does for approval thresholds.
+- **Public disclosure**: once published, eligibility, scope, evaluation
+  criteria, bid-security terms, and the closing date appear on the public
+  project page — matching the blueprint's own disclosure boundary (notice/
+  criteria/dates are public; bid *contents*, not built yet, stay
+  protected).
+
+**Explicitly not yet built** (the rest of blueprint Phases 2–5): encrypted
+electronic bid submission/opening, prequalification/EOI, clarifications and
+addenda, evaluation committees, Tenders Board approval routing, BPP
+Certificate of No Objection, contract/milestone/payment management,
+NOCOPO/OCDS export, audit analytics. Prequalification and clarifications
+both have an obvious extension point (an FK to `Solicitation`) without
+needing to restructure anything built so far. Record `status` for every
+other transition (`Advertised` → `Tendering` → `Awarded` → ...) still moves
+manually via the existing staff status-transition screen — evidence-gating
+those states isn't honestly buildable until the evaluation/approval
+machinery above exists.
 
 ## What's explicitly deferred (Phase 2 remainder — do not build without being asked)
 

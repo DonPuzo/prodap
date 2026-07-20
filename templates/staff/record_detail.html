@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block content %}
+<div class="detail-hero">
+  <h2>{{ record.title }}</h2>
+  <span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span>
+</div>
+
+<div class="detail-grid">
+  <div class="field"><div class="label">{{ ui.department }}</div><div class="val">{{ record.department }}</div></div>
+  <div class="field"><div class="label">{{ ui.estimated_cost }}</div><div class="val">₦{{ record.estimated_cost|floatformat:0|intcomma }}</div></div>
+  <div class="field"><div class="label">{{ ui.procurement_method }}</div><div class="val">{{ record.procurement_method }}</div></div>
+  <div class="field"><div class="label">{{ ui.budget_source }}</div><div class="val">{{ record.budget_source }}</div></div>
+</div>
+
+<div class="actions-row">
+  <a class="btn btn-secondary" href="{% url 'staff_record_edit' record.id %}">Edit record</a>
+  <a class="btn btn-secondary" href="{% url 'staff_status_transition' record.id %}">Change status</a>
+  <a class="btn btn-secondary" href="{% url 'public_record_detail' record.id %}">Public page</a>
+</div>
+
+<h3 style="margin-top: var(--space-4);">Solicitation &amp; Advertisement</h3>
+
+{% if solicitation %}
+<div class="detail-grid">
+  <div class="field"><div class="label">Version</div><div class="val">v{{ solicitation.version }}</div></div>
+  <div class="field"><div class="label">Status</div><div class="val"><span class="badge badge-{{ solicitation.status }}">{{ solicitation.get_status_display }}</span></div></div>
+  <div class="field"><div class="label">Prepared by</div><div class="val">{{ solicitation.prepared_by.username }}</div></div>
+  {% if solicitation.approved_by %}
+  <div class="field"><div class="label">Approved by</div><div class="val">{{ solicitation.approved_by.username }}</div></div>
+  {% endif %}
+</div>
+
+<div class="actions-row">
+  <a class="btn btn-secondary" href="{% url 'staff_solicitation_detail' solicitation.id %}">View solicitation</a>
+  {% if solicitation.status == 'draft' %}
+    <a class="btn" href="{% url 'staff_solicitation_approve' solicitation.id %}">Approve / reject</a>
+  {% elif solicitation.status == 'approved' and not advertisement %}
+    <a class="btn" href="{% url 'staff_advertisement_publish' solicitation.id %}">Publish advertisement</a>
+  {% elif solicitation.status == 'rejected' %}
+    <a class="btn" href="{% url 'staff_solicitation_create' record.id %}">Prepare new version</a>
+  {% endif %}
+</div>
+{% else %}
+<p style="color: var(--muted);">No solicitation prepared yet.</p>
+{% if record.status == 'Planning' %}
+<div class="actions-row">
+  <a class="btn" href="{% url 'staff_solicitation_create' record.id %}">Prepare solicitation</a>
+</div>
+{% endif %}
+{% endif %}
+
+{% if advertisement %}
+<div class="detail-grid" style="margin-top: var(--space-4);">
+  <div class="field"><div class="label">Published by</div><div class="val">{{ advertisement.published_by.username }}</div></div>
+  <div class="field"><div class="label">Published at</div><div class="val">{{ advertisement.published_at }}</div></div>
+  <div class="field"><div class="label">Closing date</div><div class="val">{{ advertisement.closing_date }}</div></div>
+  <div class="field"><div class="label">Channels</div><div class="val">{{ advertisement.channels|join:", " }}</div></div>
+</div>
+{% endif %}
+
+{% if versions %}
+<h3 style="margin-top: var(--space-4);">Solicitation versions</h3>
+<ul class="timeline">
+  {% for v in versions %}
+  <li>
+    <div class="transition">v{{ v.version }} — {{ v.get_status_display }}</div>
+    <div class="when">Prepared {{ v.prepared_at|date:"Y-m-d" }} by {{ v.prepared_by.username }}{% if v.rejected_reason %} — {{ v.rejected_reason }}{% endif %}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

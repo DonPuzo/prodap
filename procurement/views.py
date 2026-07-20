@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.core.exceptions import PermissionDenied, ValidationError
 
 from .forms import (
+    AdvertisementForm,
     FundsConfirmationForm,
     FundsDeclineForm,
     LocalizedAuthenticationForm,
@@ -22,21 +23,28 @@ from .forms import (
     RecordFromRequisitionForm,
     RejectWithReasonForm,
     RequisitionForm,
+    SolicitationForm,
     StatusTransitionForm,
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
-from .models import PlanLine, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, User
+from .models import PlanLine, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User
 from .permissions import role_required
 from .services import (
     approve_plan,
     approve_plan_line,
+    approve_solicitation,
     confirm_requisition_funds,
     create_record_from_requisition,
     decline_requisition_funds,
     determine_requisition_method,
     find_similar_requisitions,
+    get_current_solicitation,
+    get_published_advertisement,
+    prepare_solicitation,
+    publish_advertisement,
     reject_plan,
     reject_plan_line,
+    reject_solicitation,
     review_requisition_packaging,
     submit_plan,
     submit_requisition,
@@ -108,11 +116,13 @@ def public_record_detail(request, pk):
     record = get_object_or_404(ProcurementRecord.objects.select_related('law_profile'), pk=pk)
     history = record.status_updates.select_related('updated_by').all()
     flagged_session = request.session.get('flagged_records', [])
+    advertisement = get_published_advertisement(record)
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
         'flag_count': record.flags.count(),
         'already_flagged': str(record.id) in flagged_session,
+        'advertisement': advertisement,
     })
 
 
@@ -465,4 +475,101 @@ def staff_requisition_create_record(request, pk):
         form = RecordFromRequisitionForm()
     return render(request, 'staff/record_from_requisition_form.html', {
         'requisition': requisition, 'form': form, 'error': error,
+    })
+
+
+# --- Phase 2 (non-cryptographic slice): solicitation preparation ->
+# advertisement/publication. ---
+
+@login_required
+def staff_record_detail(request, pk):
+    record = get_object_or_404(
+        ProcurementRecord.objects.select_related('law_profile', 'requisition'), pk=pk
+    )
+    solicitation = get_current_solicitation(record)
+    versions = record.solicitations.all()
+    advertisement = getattr(solicitation, 'advertisement', None) if solicitation else None
+    return render(request, 'staff/record_detail.html', {
+        'record': record, 'solicitation': solicitation, 'versions': versions, 'advertisement': advertisement,
+    })
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_solicitation_create(request, pk):
+    record = get_object_or_404(ProcurementRecord, pk=pk)
+    error = None
+    if request.method == 'POST':
+        form = SolicitationForm(request.POST)
+        if form.is_valid():
+            try:
+                solicitation = prepare_solicitation(
+                    record=record, actor=request.user, fields=form.solicitation_fields()
+                )
+                return redirect('staff_solicitation_detail', pk=solicitation.pk)
+            except ValidationError as exc:
+                error = exc.message
+    else:
+        form = SolicitationForm()
+    return render(request, 'staff/solicitation_form.html', {'record': record, 'form': form, 'error': error})
+
+
+@login_required
+def staff_solicitation_detail(request, pk):
+    solicitation = get_object_or_404(
+        Solicitation.objects.select_related('record', 'prepared_by', 'approved_by'), pk=pk
+    )
+    advertisement = getattr(solicitation, 'advertisement', None)
+    return render(request, 'staff/solicitation_detail.html', {
+        'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
+    })
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_solicitation_approve(request, pk):
+    solicitation = get_object_or_404(Solicitation, pk=pk)
+    error = None
+    if request.method == 'POST':
+        if 'reject' in request.POST:
+            reject_form = RejectWithReasonForm(request.POST)
+            if reject_form.is_valid():
+                try:
+                    reject_solicitation(
+                        solicitation=solicitation, actor=request.user, reason=reject_form.cleaned_data['reason']
+                    )
+                    return redirect('staff_solicitation_detail', pk=solicitation.pk)
+                except ValidationError as exc:
+                    error = exc.message
+        else:
+            try:
+                approve_solicitation(solicitation=solicitation, actor=request.user)
+                return redirect('staff_solicitation_detail', pk=solicitation.pk)
+            except ValidationError as exc:
+                error = exc.message
+    reject_form = RejectWithReasonForm()
+    return render(request, 'staff/solicitation_approve.html', {
+        'solicitation': solicitation, 'reject_form': reject_form, 'error': error,
+    })
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_advertisement_publish(request, pk):
+    solicitation = get_object_or_404(Solicitation, pk=pk)
+    error = None
+    if request.method == 'POST':
+        form = AdvertisementForm(request.POST)
+        if form.is_valid():
+            try:
+                publish_advertisement(
+                    solicitation=solicitation, actor=request.user,
+                    channels=form.cleaned_data['channels'],
+                    publication_proof=form.cleaned_data['publication_proof'],
+                    closing_date=form.cleaned_data['closing_date'],
+                )
+                return redirect('staff_record_detail', pk=solicitation.record_id)
+            except ValidationError as exc:
+                error = exc.message if hasattr(exc, 'message') else exc.messages
+    else:
+        form = AdvertisementForm()
+    return render(request, 'staff/advertisement_publish_form.html', {
+        'solicitation': solicitation, 'form': form, 'error': error,
     })

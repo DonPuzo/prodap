@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
 from .models import (
+    Advertisement,
     AuditEvent,
     FinancialYear,
     LawProfile,
@@ -11,6 +12,7 @@ from .models import (
     ProcurementRecord,
     RecordFlag,
     Requisition,
+    Solicitation,
     StatusUpdate,
     ThresholdRule,
     User,
@@ -136,6 +138,36 @@ class RequisitionAdmin(admin.ModelAdmin):
         'threshold_rule', 'determined_method', 'determined_approving_authority',
         'bpp_prior_review_required', 'created_at', 'updated_at',
     )
+
+
+@admin.register(Solicitation)
+class SolicitationAdmin(admin.ModelAdmin):
+    """Every field here is either service-written-once (prepare_solicitation/
+    approve_solicitation/reject_solicitation) or must stay immutable after
+    approval for the audit trail to mean anything — there is no legitimate
+    post-creation admin edit path, so it's locked down fully from day one."""
+
+    list_display = ('record', 'version', 'status', 'prepared_by', 'approved_by')
+    list_filter = ('status',)
+    readonly_fields = [f.name for f in Solicitation._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Advertisement)
+class AdvertisementAdmin(admin.ModelAdmin):
+    list_display = ('solicitation', 'closing_date', 'published_by', 'published_at')
+    readonly_fields = [f.name for f in Advertisement._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(AuditEvent)

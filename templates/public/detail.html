@@ -51,6 +51,38 @@
   </div>
 </div>
 
+{% if advertisement %}
+<h3>Tender / Solicitation Details</h3>
+<div class="detail-grid">
+  <div class="field">
+    <div class="label">Eligibility</div>
+    <div class="val">{{ advertisement.solicitation.eligibility_criteria }}</div>
+  </div>
+  <div class="field">
+    <div class="label">Scope / Specifications</div>
+    <div class="val">{{ advertisement.solicitation.scope_and_specifications }}</div>
+  </div>
+  <div class="field">
+    <div class="label">Evaluation Criteria</div>
+    <div class="val">{{ advertisement.solicitation.evaluation_criteria }}</div>
+  </div>
+  {% if advertisement.solicitation.bid_security_required %}
+  <div class="field">
+    <div class="label">Bid Security</div>
+    <div class="val">{{ advertisement.solicitation.bid_security_type }} — ₦{{ advertisement.solicitation.bid_security_amount|floatformat:0|intcomma }}</div>
+  </div>
+  {% endif %}
+  <div class="field">
+    <div class="label">Closing Date</div>
+    <div class="val">{{ advertisement.closing_date }}</div>
+  </div>
+  <div class="field">
+    <div class="label">Published</div>
+    <div class="val">{{ advertisement.published_at }}</div>
+  </div>
+</div>
+{% endif %}
+
 <h3>{{ ui.status_history }}</h3>
 {% if history %}
 <ul class="timeline">

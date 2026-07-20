@@ -7,12 +7,14 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import (
+    Advertisement,
     AuditEvent,
     PlanLine,
     ProcessIdentifierSequence,
     ProcurementPlan,
     ProcurementRecord,
     Requisition,
+    Solicitation,
     StatusUpdate,
     ThresholdRule,
 )
@@ -342,3 +344,110 @@ def create_record_from_requisition(*, requisition, actor, record_fields):
             new_value={'record_id': str(record.id)},
         )
     return record
+
+
+# --- Phase 2 (non-cryptographic slice): solicitation preparation ->
+# advertisement/publication. Every gate function re-validates the full
+# precondition chain (record status, solicitation status), not just the
+# immediately-prior step, matching the defense-in-depth discipline added to
+# the Requisition gates above. ---
+
+
+def get_current_solicitation(record):
+    """Latest non-rejected version for a record, or None. Read-only helper
+    shared by staff and public views."""
+    return record.solicitations.exclude(status=Solicitation.Status.REJECTED).order_by('-version').first()
+
+
+def get_published_advertisement(record):
+    return Advertisement.objects.filter(solicitation__record=record).select_related(
+        'solicitation'
+    ).order_by('-solicitation__version').first()
+
+
+def prepare_solicitation(*, record, actor, fields):
+    if record.status != ProcurementRecord.Status.PLANNING:
+        raise ValidationError(f'This record is {record.status}, not Planning — a solicitation cannot be prepared.')
+    current = get_current_solicitation(record)
+    if current is not None:
+        raise ValidationError(
+            f'This record already has a solicitation in {current.get_status_display()} status — '
+            'reject it before preparing a new version.'
+        )
+    with transaction.atomic():
+        next_version = (
+            record.solicitations.aggregate(django_models.Max('version'))['version__max'] or 0
+        ) + 1
+        solicitation = Solicitation.objects.create(
+            record=record, version=next_version, prepared_by=actor, **fields
+        )
+        log_audit_event(target=solicitation, action=AuditEvent.Action.SOLICITATION_PREPARED, actor=actor)
+    return solicitation
+
+
+def approve_solicitation(*, solicitation, actor, note=''):
+    if solicitation.status != Solicitation.Status.DRAFT:
+        raise ValidationError(f'This solicitation is already {solicitation.get_status_display().lower()}.')
+    if actor.pk == solicitation.prepared_by_id:
+        raise SeparationOfDutiesError('You cannot approve a solicitation you prepared yourself.')
+    if solicitation.record.status != ProcurementRecord.Status.PLANNING:
+        raise ValidationError('The record behind this solicitation is no longer in Planning.')
+    with transaction.atomic():
+        solicitation.status = Solicitation.Status.APPROVED
+        solicitation.approved_by = actor
+        solicitation.approved_at = timezone.now()
+        solicitation.save(update_fields=['status', 'approved_by', 'approved_at'])
+        log_audit_event(target=solicitation, action=AuditEvent.Action.SOLICITATION_APPROVED, actor=actor, reason=note)
+    return solicitation
+
+
+def reject_solicitation(*, solicitation, actor, reason):
+    if not reason.strip():
+        raise ValidationError('A reason is required to reject a solicitation.')
+    if solicitation.status != Solicitation.Status.DRAFT:
+        raise ValidationError(f'This solicitation is already {solicitation.get_status_display().lower()}.')
+    with transaction.atomic():
+        solicitation.status = Solicitation.Status.REJECTED
+        solicitation.rejected_reason = reason
+        solicitation.save(update_fields=['status', 'rejected_reason'])
+        log_audit_event(target=solicitation, action=AuditEvent.Action.SOLICITATION_REJECTED, actor=actor, reason=reason)
+    return solicitation
+
+
+def publish_advertisement(*, solicitation, actor, channels, publication_proof, closing_date):
+    if solicitation.status != Solicitation.Status.APPROVED:
+        raise ValidationError('The solicitation must be approved before it can be advertised.')
+    record = solicitation.record
+    if record.status != ProcurementRecord.Status.PLANNING:
+        raise ValidationError(f'This record is {record.status}, not Planning — it cannot be advertised.')
+    if hasattr(solicitation, 'advertisement'):
+        raise ValidationError('This solicitation has already been advertised.')
+
+    minimum_days = record.law_profile.default_minimum_bidding_days
+    published_at = timezone.now()
+    earliest_closing = published_at.date() + datetime.timedelta(days=minimum_days)
+    if closing_date < earliest_closing:
+        raise ValidationError({
+            'closing_date': (
+                f'Closing date must be at least {minimum_days} days after publication '
+                f'({earliest_closing}), per institutional policy.'
+            )
+        })
+
+    with transaction.atomic():
+        advertisement = Advertisement.objects.create(
+            solicitation=solicitation, channels=channels, publication_proof=publication_proof,
+            closing_date=closing_date, minimum_bidding_days_applied=minimum_days, published_by=actor,
+        )
+        log_audit_event(
+            target=advertisement, action=AuditEvent.Action.ADVERTISEMENT_PUBLISHED, actor=actor,
+            new_value={'closing_date': closing_date.isoformat(), 'channels': channels},
+        )
+        # Same transaction — StatusUpdate stays the single source of truth
+        # for ProcurementRecord.status history; the AuditEvent above covers
+        # the advertisement-specific gate crossing separately.
+        transition_status(
+            record=record, new_status=ProcurementRecord.Status.ADVERTISED, updated_by=actor,
+            note=f'Advertised via {", ".join(channels)}; closes {closing_date}.',
+        )
+    return advertisement

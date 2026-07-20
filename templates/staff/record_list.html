@@ -40,6 +40,7 @@
       </td>
       <td data-label="Actions">
         <div class="actions-row">
+          <a class="btn btn-secondary" href="{% url 'staff_record_detail' record.id %}">View</a>
           <a class="btn btn-secondary" href="{% url 'staff_record_edit' record.id %}">Edit</a>
           <a class="btn btn-secondary" href="{% url 'staff_status_transition' record.id %}">Change status</a>
           <a class="btn btn-secondary" href="{% url 'public_record_detail' record.id %}">Public page</a>

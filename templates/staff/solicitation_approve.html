@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Review Solicitation v{{ solicitation.version }}: {{ solicitation.record.title }}</h2>
+<p>Prepared by <strong>{{ solicitation.prepared_by.username }}</strong>.</p>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    <button class="btn" type="submit">Approve solicitation</button>
+  </form>
+</div>
+
+<div class="form-card" style="margin-top: var(--space-4);">
+  <form method="post">
+    {% csrf_token %}
+    {{ reject_form.as_p }}
+    <button class="btn btn-flag" type="submit" name="reject" value="1">Reject solicitation</button>
+  </form>
+</div>
+{% endblock %}

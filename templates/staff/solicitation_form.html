@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Prepare Solicitation: {{ record.title }}</h2>
+
+{% if error %}<div class="message message-error">{{ error }}</div>{% endif %}
+
+<div class="form-card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn" type="submit">Save solicitation (draft)</button>
+    <a class="btn btn-secondary" href="{% url 'staff_record_detail' record.id %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

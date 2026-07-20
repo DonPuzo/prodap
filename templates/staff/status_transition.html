@@ -2,6 +2,9 @@
 {% block content %}
 <h2>Change status: {{ record.title }}</h2>
 <p>Current status: <span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span></p>
+{% if record.status == 'Planning' %}
+<p class="message">To move this record to Advertised, prepare and publish a Solicitation/Advertisement — <a href="{% url 'staff_record_detail' record.id %}">go to record details</a>.</p>
+{% endif %}
 <div class="form-card">
   <form method="post">
     {% csrf_token %}
