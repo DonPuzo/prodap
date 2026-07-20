@@ -254,3 +254,11 @@ class AdvertisementForm(forms.Form):
     channels = forms.MultipleChoiceField(choices=Advertisement.CHANNEL_CHOICES, widget=forms.CheckboxSelectMultiple)
     publication_proof = forms.CharField(widget=forms.Textarea(attrs={'rows': 4}))
     closing_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
+
+
+class ClarificationQuestionForm(forms.Form):
+    question = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)
+
+
+class ClarificationAnswerForm(forms.Form):
+    answer = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)

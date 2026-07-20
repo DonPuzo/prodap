@@ -10,6 +10,7 @@ urlpatterns = [
     path('about/', views.public_about, name='public_about'),
     path('projects/<uuid:pk>/', views.public_record_detail, name='public_record_detail'),
     path('projects/<uuid:pk>/flag/', views.flag_record, name='flag_record'),
+    path('projects/<uuid:pk>/ask/', views.submit_clarification, name='submit_clarification'),
     path('export/data.json', views.export_json, name='export_json'),
     path('export/data.csv', views.export_csv, name='export_csv'),
     path('set-lang/<str:lang_code>/', views.set_lang, name='set_lang'),
@@ -65,5 +66,9 @@ urlpatterns = [
     path(
         'staff/solicitations/<uuid:pk>/publish/',
         views.staff_advertisement_publish, name='staff_advertisement_publish',
+    ),
+    path(
+        'staff/clarifications/<uuid:pk>/answer/',
+        views.staff_clarification_answer, name='staff_clarification_answer',
     ),
 ]

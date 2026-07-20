@@ -4,6 +4,7 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from .models import (
     Advertisement,
     AuditEvent,
+    Clarification,
     FinancialYear,
     LawProfile,
     PlanLine,
@@ -162,6 +163,23 @@ class SolicitationAdmin(admin.ModelAdmin):
 class AdvertisementAdmin(admin.ModelAdmin):
     list_display = ('solicitation', 'closing_date', 'published_by', 'published_at')
     readonly_fields = [f.name for f in Advertisement._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Clarification)
+class ClarificationAdmin(admin.ModelAdmin):
+    """Every field is either public-submitted (question) or service-written-
+    once via answer_clarification() — no legitimate admin edit path, same
+    posture as SolicitationAdmin/AdvertisementAdmin."""
+
+    list_display = ('solicitation', 'asked_at', 'answered_by', 'answered_at')
+    list_filter = ('solicitation',)
+    readonly_fields = [f.name for f in Clarification._meta.fields]
 
     def has_add_permission(self, request):
         return False

@@ -81,6 +81,39 @@
     <div class="val">{{ advertisement.published_at }}</div>
   </div>
 </div>
+
+<div class="flag-box">
+  <h3>{{ ui.clarifications_heading }}</h3>
+  {% if clarifications_answered %}
+  <ul class="timeline">
+    {% for c in clarifications_answered %}
+    <li>
+      <div class="when">{{ c.asked_at|date:"Y-m-d" }}</div>
+      <div class="transition">Q: {{ c.question }}</div>
+      <div class="note">A: {{ c.answer }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>{{ ui.no_clarifications_yet }}</p>
+  {% endif %}
+  {% if clarifications_pending_count %}
+  <p class="flag-count">{{ clarifications_pending_count }} {{ ui.clarification_pending_note }}</p>
+  {% endif %}
+
+  {% if can_ask_question %}
+  <button type="button" class="btn btn-secondary flag-toggle" data-toggle-target="#ask-form">
+    {{ ui.ask_question_button }}
+  </button>
+  <form id="ask-form" class="flag-form" method="post" action="{% url 'submit_clarification' record.id %}">
+    {% csrf_token %}
+    <textarea name="question" placeholder="{{ ui.ask_question_placeholder }}"></textarea>
+    <button class="btn" type="submit">{{ ui.ask_question_submit }}</button>
+  </form>
+  {% else %}
+  <p style="color: var(--muted); font-size: .85em;">{{ ui.clarification_closed_note }}</p>
+  {% endif %}
+</div>
 {% endif %}
 
 <h3>{{ ui.status_history }}</h3>

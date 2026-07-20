@@ -463,6 +463,7 @@ class AuditEvent(models.Model):
         SOLICITATION_APPROVED = 'solicitation_approved', 'Solicitation Approved'
         SOLICITATION_REJECTED = 'solicitation_rejected', 'Solicitation Rejected'
         ADVERTISEMENT_PUBLISHED = 'advertisement_published', 'Advertisement Published'
+        CLARIFICATION_ANSWERED = 'clarification_answered', 'Clarification Answered'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -607,3 +608,36 @@ class Advertisement(models.Model):
 
     def __str__(self):
         return f'Advertisement for {self.solicitation.record.title} (closes {self.closing_date})'
+
+
+class Clarification(models.Model):
+    """Public Q&A on a published Solicitation (integration framework step
+    08). Deliberately anonymous — no asked_by field — matching both
+    RecordFlag's existing anonymous-by-design precedent and the blueprint's
+    own rule that responses be "distributed equally, without identifying
+    the questioner." An empty `answer` means unanswered; see
+    services.answer_clarification() for the only sanctioned way to answer.
+
+    Public display is deliberately conservative: answered Q&A pairs are
+    shown in full, but unanswered questions are not shown by raw text (only
+    a pending count) — mirroring how RecordFlag's note text is staff-only
+    while only the flag count is public, and how a real tender addendum
+    publishes a finished Q&A pair rather than raw incoming questions."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    solicitation = models.ForeignKey(Solicitation, on_delete=models.PROTECT, related_name='clarifications')
+    question = models.TextField()
+    asked_at = models.DateTimeField(auto_now_add=True)
+    answer = models.TextField(blank=True)
+    answered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='clarifications_answered',
+    )
+    answered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['asked_at']
+
+    def __str__(self):
+        status = 'answered' if self.answer else 'pending'
+        return f'Clarification on {self.solicitation.record.title} ({status})'

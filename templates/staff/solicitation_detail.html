@@ -40,4 +40,24 @@
   <div class="field"><div class="label">Publication proof</div><div class="val">{{ advertisement.publication_proof }}</div></div>
 </div>
 {% endif %}
+
+{% if clarifications %}
+<h3 style="margin-top: var(--space-4);">Clarifications</h3>
+{% for c in clarifications %}
+<div class="form-card" style="margin-bottom: var(--space-3);">
+  <p><strong>Q:</strong> {{ c.question }}</p>
+  <p style="color: var(--muted); font-size: .8em;">Asked {{ c.asked_at|date:"Y-m-d H:i" }}</p>
+  {% if c.answer %}
+    <p><strong>A:</strong> {{ c.answer }}</p>
+    <p style="color: var(--muted); font-size: .8em;">Answered by {{ c.answered_by.username }} on {{ c.answered_at|date:"Y-m-d H:i" }}</p>
+  {% else %}
+    <form method="post" action="{% url 'staff_clarification_answer' c.id %}">
+      {% csrf_token %}
+      {{ answer_form.as_p }}
+      <button class="btn" type="submit">Submit answer</button>
+    </form>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
 {% endblock %}

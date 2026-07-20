@@ -7,11 +7,14 @@ from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 
 from django.core.exceptions import PermissionDenied, ValidationError
 
 from .forms import (
     AdvertisementForm,
+    ClarificationAnswerForm,
+    ClarificationQuestionForm,
     FundsConfirmationForm,
     FundsDeclineForm,
     LocalizedAuthenticationForm,
@@ -27,9 +30,12 @@ from .forms import (
     StatusTransitionForm,
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
-from .models import PlanLine, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User
+from .models import (
+    Clarification, PlanLine, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
+)
 from .permissions import role_required
 from .services import (
+    answer_clarification,
     approve_plan,
     approve_plan_line,
     approve_solicitation,
@@ -46,6 +52,7 @@ from .services import (
     reject_plan_line,
     reject_solicitation,
     review_requisition_packaging,
+    submit_clarification_question,
     submit_plan,
     submit_requisition,
     transition_status,
@@ -154,12 +161,23 @@ def public_record_detail(request, pk):
     history = record.status_updates.select_related('updated_by').all()
     flagged_session = request.session.get('flagged_records', [])
     advertisement = get_published_advertisement(record)
+    clarifications_answered = []
+    clarifications_pending_count = 0
+    can_ask_question = False
+    if advertisement:
+        all_clarifications = advertisement.solicitation.clarifications.all()
+        clarifications_answered = [c for c in all_clarifications if c.answer]
+        clarifications_pending_count = sum(1 for c in all_clarifications if not c.answer)
+        can_ask_question = timezone.localdate() <= advertisement.closing_date
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
         'flag_count': record.flags.count(),
         'already_flagged': str(record.id) in flagged_session,
         'advertisement': advertisement,
+        'clarifications_answered': clarifications_answered,
+        'clarifications_pending_count': clarifications_pending_count,
+        'can_ask_question': can_ask_question,
     })
 
 
@@ -179,6 +197,23 @@ def flag_record(request, pk):
             messages.success(request, ui['flag_success_message'])
         else:
             messages.info(request, ui['already_flagged'])
+    return redirect('public_record_detail', pk=record.id)
+
+
+def submit_clarification(request, pk):
+    """Public, no login — ask a question about a published tender. Mirrors
+    flag_record's shape: POST-only, errors surfaced via Django messages
+    (not a form re-render), always redirects back to the detail page."""
+    record = get_object_or_404(ProcurementRecord, pk=pk)
+    ui = get_strings(request.session.get('lang', DEFAULT_LANG))
+    if request.method == 'POST':
+        form = ClarificationQuestionForm(request.POST)
+        if form.is_valid():
+            try:
+                submit_clarification_question(record=record, question=form.cleaned_data['question'])
+                messages.success(request, ui['ask_question_submitted_message'])
+            except ValidationError as exc:
+                messages.info(request, exc.message)
     return redirect('public_record_detail', pk=record.id)
 
 
@@ -556,8 +591,10 @@ def staff_solicitation_detail(request, pk):
         Solicitation.objects.select_related('record', 'prepared_by', 'approved_by'), pk=pk
     )
     advertisement = getattr(solicitation, 'advertisement', None)
+    clarifications = solicitation.clarifications.select_related('answered_by').all()
     return render(request, 'staff/solicitation_detail.html', {
         'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
+        'clarifications': clarifications, 'answer_form': ClarificationAnswerForm(),
     })
 
 
@@ -610,3 +647,19 @@ def staff_advertisement_publish(request, pk):
     return render(request, 'staff/advertisement_publish_form.html', {
         'solicitation': solicitation, 'form': form, 'error': error,
     })
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_clarification_answer(request, pk):
+    """POST-only inline action from staff/solicitation_detail.html — no
+    separate GET form page, same combined-actions-on-one-page convention
+    used throughout the Foundation/Phase 2 staff screens."""
+    clarification = get_object_or_404(Clarification, pk=pk)
+    if request.method == 'POST':
+        form = ClarificationAnswerForm(request.POST)
+        if form.is_valid():
+            try:
+                answer_clarification(clarification=clarification, actor=request.user, answer=form.cleaned_data['answer'])
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=clarification.solicitation_id)

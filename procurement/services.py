@@ -9,6 +9,7 @@ from django.utils import timezone
 from .models import (
     Advertisement,
     AuditEvent,
+    Clarification,
     PlanLine,
     ProcessIdentifierSequence,
     ProcurementPlan,
@@ -451,3 +452,35 @@ def publish_advertisement(*, solicitation, actor, channels, publication_proof, c
             note=f'Advertised via {", ".join(channels)}; closes {closing_date}.',
         )
     return advertisement
+
+
+# --- Clarifications & Addenda (blueprint step 08): public Q&A on a
+# published Solicitation. submit_clarification_question() is anonymous —
+# no actor, no audit event — matching flag_record's existing precedent for
+# public-submitted content. answer_clarification() is the one sanctioned
+# staff action and IS audited, same as every other gate crossing above. ---
+
+
+def submit_clarification_question(*, record, question):
+    if not question.strip():
+        raise ValidationError('A question is required.')
+    solicitation = get_current_solicitation(record)
+    if solicitation is None or solicitation.status != Solicitation.Status.APPROVED or not hasattr(solicitation, 'advertisement'):
+        raise ValidationError('This record does not have a published solicitation to ask about.')
+    if timezone.localdate() > solicitation.advertisement.closing_date:
+        raise ValidationError('The bidding period for this solicitation has closed.')
+    return Clarification.objects.create(solicitation=solicitation, question=question.strip())
+
+
+def answer_clarification(*, clarification, actor, answer):
+    if not answer.strip():
+        raise ValidationError('An answer is required.')
+    if clarification.answer:
+        raise ValidationError('This clarification has already been answered.')
+    with transaction.atomic():
+        clarification.answer = answer
+        clarification.answered_by = actor
+        clarification.answered_at = timezone.now()
+        clarification.save(update_fields=['answer', 'answered_by', 'answered_at'])
+        log_audit_event(target=clarification, action=AuditEvent.Action.CLARIFICATION_ANSWERED, actor=actor)
+    return clarification
