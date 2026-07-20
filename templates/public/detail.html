@@ -114,6 +114,25 @@
   <p style="color: var(--muted); font-size: .85em;">{{ ui.clarification_closed_note }}</p>
   {% endif %}
 </div>
+
+<div class="flag-box">
+  <h3>{{ ui.prequalification_heading }}</h3>
+  {% if reviewed_applicants %}
+  <ul class="timeline">
+    {% for a in reviewed_applicants %}
+    <li>
+      <div class="transition">{{ a.vendor_name }}
+        <span class="badge badge-{{ a.outcome }}">
+          {% if a.outcome == 'qualified' %}{{ ui.outcome_qualified }}{% else %}{{ ui.outcome_not_qualified }}{% endif %}
+        </span>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>{{ ui.no_prequalified_bidders }}</p>
+  {% endif %}
+</div>
 {% endif %}
 
 <h3>{{ ui.status_history }}</h3>

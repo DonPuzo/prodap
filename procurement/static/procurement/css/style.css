@@ -315,6 +315,10 @@ table.record-list td a.title-link:hover { color: var(--color-primary); text-deco
 .badge-record_created { background: #7c3aed; }
 .badge-cancelled { background: #6b7280; }
 
+/* Prequalification outcomes */
+.badge-qualified { background: #1a8a44; }
+.badge-not_qualified { background: #d1332f; }
+
 /* ---------- Detail page ---------- */
 .detail-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
 .detail-hero h2 { margin: 0; font-size: 1.6em; }

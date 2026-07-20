@@ -464,6 +464,8 @@ class AuditEvent(models.Model):
         SOLICITATION_REJECTED = 'solicitation_rejected', 'Solicitation Rejected'
         ADVERTISEMENT_PUBLISHED = 'advertisement_published', 'Advertisement Published'
         CLARIFICATION_ANSWERED = 'clarification_answered', 'Clarification Answered'
+        PREQUALIFICATION_RECORDED = 'prequalification_recorded', 'Prequalification Applicant Recorded'
+        PREQUALIFICATION_REVIEWED = 'prequalification_reviewed', 'Prequalification Applicant Reviewed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -641,3 +643,54 @@ class Clarification(models.Model):
     def __str__(self):
         status = 'answered' if self.answer else 'pending'
         return f'Clarification on {self.solicitation.record.title} ({status})'
+
+
+class PrequalificationApplicant(models.Model):
+    """Expression-of-interest / prequalification tracking (integration
+    framework step 07's other half). Staff-recorded on behalf of a vendor —
+    no vendor accounts/self-service exist yet (still explicitly deferred
+    elsewhere in the roadmap), so a procurement_unit member enters that a
+    vendor applied and later records the outcome.
+
+    Deliberately NOT gated by procurement_method: method names are
+    law-profile-configured data (LawProfile.procurement_methods), not a
+    fixed code enum, so hardcoding e.g. "Restricted Tendering" here would
+    silently break for any other law profile using different terminology.
+    Available on any published solicitation; staff simply use it when the
+    method calls for prequalification.
+
+    Recorded against the solicitation actually advertised — this is a
+    simplification versus real two-stage tendering, where EOI/prequalification
+    is often its own earlier advertisement stage with its own document. A
+    future increment could model that as a separate stage if needed; for now
+    this tracks applicants against the one Solicitation/Advertisement this
+    system already models."""
+
+    class Outcome(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        QUALIFIED = 'qualified', 'Qualified'
+        NOT_QUALIFIED = 'not_qualified', 'Not Qualified'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    solicitation = models.ForeignKey(
+        Solicitation, on_delete=models.PROTECT, related_name='prequalification_applicants'
+    )
+    vendor_name = models.CharField(max_length=255)
+    vendor_registration_no = models.CharField(max_length=100, blank=True)
+    outcome = models.CharField(max_length=16, choices=Outcome.choices, default=Outcome.PENDING)
+    review_note = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='prequalifications_recorded'
+    )
+    recorded_at = models.DateTimeField(auto_now_add=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='prequalifications_reviewed',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['recorded_at']
+
+    def __str__(self):
+        return f'{self.vendor_name} — {self.solicitation.record.title} ({self.get_outcome_display()})'

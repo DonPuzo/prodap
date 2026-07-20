@@ -21,6 +21,8 @@ from .forms import (
     MethodDeterminationForm,
     PackagingReviewForm,
     PlanLineForm,
+    PrequalificationApplicantForm,
+    PrequalificationReviewForm,
     ProcurementPlanForm,
     ProcurementRecordForm,
     RecordFromRequisitionForm,
@@ -31,7 +33,8 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Clarification, PlanLine, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
+    Clarification, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
+    Requisition, Solicitation, User,
 )
 from .permissions import role_required
 from .services import (
@@ -48,9 +51,11 @@ from .services import (
     get_published_advertisement,
     prepare_solicitation,
     publish_advertisement,
+    record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
     reject_solicitation,
+    review_prequalification_applicant,
     review_requisition_packaging,
     submit_clarification_question,
     submit_plan,
@@ -164,11 +169,20 @@ def public_record_detail(request, pk):
     clarifications_answered = []
     clarifications_pending_count = 0
     can_ask_question = False
+    reviewed_applicants = []
     if advertisement:
         all_clarifications = advertisement.solicitation.clarifications.all()
         clarifications_answered = [c for c in all_clarifications if c.answer]
         clarifications_pending_count = sum(1 for c in all_clarifications if not c.answer)
         can_ask_question = timezone.localdate() <= advertisement.closing_date
+        # Pending applications aren't shown publicly, same "raw stays
+        # private, resolved goes public" rule as clarifications — the
+        # review note (which may contain sensitive evaluation commentary)
+        # stays staff-only even once reviewed.
+        reviewed_applicants = [
+            a for a in advertisement.solicitation.prequalification_applicants.all()
+            if a.outcome != PrequalificationApplicant.Outcome.PENDING
+        ]
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -178,6 +192,7 @@ def public_record_detail(request, pk):
         'clarifications_answered': clarifications_answered,
         'clarifications_pending_count': clarifications_pending_count,
         'can_ask_question': can_ask_question,
+        'reviewed_applicants': reviewed_applicants,
     })
 
 
@@ -592,9 +607,12 @@ def staff_solicitation_detail(request, pk):
     )
     advertisement = getattr(solicitation, 'advertisement', None)
     clarifications = solicitation.clarifications.select_related('answered_by').all()
+    applicants = solicitation.prequalification_applicants.select_related('recorded_by', 'reviewed_by').all()
     return render(request, 'staff/solicitation_detail.html', {
         'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
         'clarifications': clarifications, 'answer_form': ClarificationAnswerForm(),
+        'applicants': applicants, 'applicant_form': PrequalificationApplicantForm(),
+        'review_form': PrequalificationReviewForm(),
     })
 
 
@@ -663,3 +681,38 @@ def staff_clarification_answer(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message)
     return redirect('staff_solicitation_detail', pk=clarification.solicitation_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_prequalification_add(request, pk):
+    """POST-only inline action from staff/solicitation_detail.html,
+    matching staff_clarification_answer's shape."""
+    solicitation = get_object_or_404(Solicitation, pk=pk)
+    if request.method == 'POST':
+        form = PrequalificationApplicantForm(request.POST)
+        if form.is_valid():
+            try:
+                record_prequalification_applicant(
+                    solicitation=solicitation, actor=request.user,
+                    vendor_name=form.cleaned_data['vendor_name'],
+                    vendor_registration_no=form.cleaned_data['vendor_registration_no'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=solicitation.pk)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_prequalification_review(request, pk):
+    applicant = get_object_or_404(PrequalificationApplicant, pk=pk)
+    if request.method == 'POST':
+        form = PrequalificationReviewForm(request.POST)
+        if form.is_valid():
+            try:
+                review_prequalification_applicant(
+                    applicant=applicant, actor=request.user,
+                    outcome=form.cleaned_data['outcome'], note=form.cleaned_data['note'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=applicant.solicitation_id)

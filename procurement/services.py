@@ -11,6 +11,7 @@ from .models import (
     AuditEvent,
     Clarification,
     PlanLine,
+    PrequalificationApplicant,
     ProcessIdentifierSequence,
     ProcurementPlan,
     ProcurementRecord,
@@ -484,3 +485,43 @@ def answer_clarification(*, clarification, actor, answer):
         clarification.save(update_fields=['answer', 'answered_by', 'answered_at'])
         log_audit_event(target=clarification, action=AuditEvent.Action.CLARIFICATION_ANSWERED, actor=actor)
     return clarification
+
+
+# --- Prequalification / EOI (blueprint step 07, the other half): staff-
+# recorded tracking of vendors who applied, and the outcome once reviewed.
+# Not gated by procurement method — see PrequalificationApplicant's
+# docstring for why hardcoding a method check here would be wrong. ---
+
+
+def record_prequalification_applicant(*, solicitation, actor, vendor_name, vendor_registration_no=''):
+    if not vendor_name.strip():
+        raise ValidationError('A vendor name is required.')
+    if solicitation.status != Solicitation.Status.APPROVED or not hasattr(solicitation, 'advertisement'):
+        raise ValidationError('This solicitation has not been published — nothing to apply against yet.')
+    with transaction.atomic():
+        applicant = PrequalificationApplicant.objects.create(
+            solicitation=solicitation, vendor_name=vendor_name.strip(),
+            vendor_registration_no=vendor_registration_no.strip(), recorded_by=actor,
+        )
+        log_audit_event(target=applicant, action=AuditEvent.Action.PREQUALIFICATION_RECORDED, actor=actor)
+    return applicant
+
+
+def review_prequalification_applicant(*, applicant, actor, outcome, note):
+    if outcome not in (PrequalificationApplicant.Outcome.QUALIFIED, PrequalificationApplicant.Outcome.NOT_QUALIFIED):
+        raise ValidationError('Outcome must be Qualified or Not Qualified.')
+    if not note.strip():
+        raise ValidationError('A written review note is required.')
+    if applicant.outcome != PrequalificationApplicant.Outcome.PENDING:
+        raise ValidationError(f'This applicant is already {applicant.get_outcome_display().lower()}.')
+    with transaction.atomic():
+        applicant.outcome = outcome
+        applicant.review_note = note
+        applicant.reviewed_by = actor
+        applicant.reviewed_at = timezone.now()
+        applicant.save(update_fields=['outcome', 'review_note', 'reviewed_by', 'reviewed_at'])
+        log_audit_event(
+            target=applicant, action=AuditEvent.Action.PREQUALIFICATION_REVIEWED, actor=actor, reason=note,
+            new_value={'outcome': outcome},
+        )
+    return applicant

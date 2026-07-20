@@ -96,6 +96,10 @@ STRINGS = {
         'clarification_pending_note': 'question(s) awaiting a response.',
         'no_clarifications_yet': 'No questions have been answered for this tender yet.',
         'clarification_closed_note': 'The bidding period for this tender has closed — questions are no longer being accepted.',
+        'prequalification_heading': 'Prequalified Bidders',
+        'no_prequalified_bidders': 'No prequalification outcomes have been published for this tender yet.',
+        'outcome_qualified': 'Qualified',
+        'outcome_not_qualified': 'Not Qualified',
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -185,6 +189,10 @@ STRINGS = {
         'clarification_pending_note': 'question(s) dey wait for answer.',
         'no_clarifications_yet': 'No question don dey answered for dis tender yet.',
         'clarification_closed_note': 'Di bidding period for dis tender don close — dem no dey accept question again.',
+        'prequalification_heading': 'Bidders Wey Qualify',
+        'no_prequalified_bidders': 'No prequalification result don dey published for dis tender yet.',
+        'outcome_qualified': 'E Qualify',
+        'outcome_not_qualified': 'E No Qualify',
     },
 }
 

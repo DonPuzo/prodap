@@ -8,6 +8,7 @@ from .models import (
     FinancialYear,
     LawProfile,
     PlanLine,
+    PrequalificationApplicant,
     ProcessIdentifierSequence,
     ProcurementPlan,
     ProcurementRecord,
@@ -180,6 +181,23 @@ class ClarificationAdmin(admin.ModelAdmin):
     list_display = ('solicitation', 'asked_at', 'answered_by', 'answered_at')
     list_filter = ('solicitation',)
     readonly_fields = [f.name for f in Clarification._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PrequalificationApplicant)
+class PrequalificationApplicantAdmin(admin.ModelAdmin):
+    """Every field is either staff-entered-once (record_prequalification_applicant)
+    or service-written-once via review_prequalification_applicant() — same
+    lockdown posture as SolicitationAdmin/AdvertisementAdmin/ClarificationAdmin."""
+
+    list_display = ('vendor_name', 'solicitation', 'outcome', 'recorded_by', 'reviewed_by')
+    list_filter = ('outcome',)
+    readonly_fields = [f.name for f in PrequalificationApplicant._meta.fields]
 
     def has_add_permission(self, request):
         return False

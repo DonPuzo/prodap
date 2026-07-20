@@ -60,4 +60,33 @@
 </div>
 {% endfor %}
 {% endif %}
+
+{% if advertisement %}
+<h3 style="margin-top: var(--space-4);">Prequalification / EOI</h3>
+{% for a in applicants %}
+<div class="form-card" style="margin-bottom: var(--space-3);">
+  <p><strong>{{ a.vendor_name }}</strong>{% if a.vendor_registration_no %} — {{ a.vendor_registration_no }}{% endif %}
+    <span class="badge badge-{{ a.outcome }}">{{ a.get_outcome_display }}</span>
+  </p>
+  <p style="color: var(--muted); font-size: .8em;">Recorded by {{ a.recorded_by.username }} on {{ a.recorded_at|date:"Y-m-d" }}</p>
+  {% if a.outcome == 'pending' %}
+    <form method="post" action="{% url 'staff_prequalification_review' a.id %}">
+      {% csrf_token %}
+      {{ review_form.as_p }}
+      <button class="btn" type="submit">Submit review</button>
+    </form>
+  {% else %}
+    <p>{{ a.review_note }}</p>
+    <p style="color: var(--muted); font-size: .8em;">Reviewed by {{ a.reviewed_by.username }} on {{ a.reviewed_at|date:"Y-m-d" }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+<div class="form-card">
+  <form method="post" action="{% url 'staff_prequalification_add' solicitation.id %}">
+    {% csrf_token %}
+    {{ applicant_form.as_p }}
+    <button class="btn" type="submit">Record applicant</button>
+  </form>
+</div>
+{% endif %}
 {% endblock %}

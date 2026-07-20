@@ -11,6 +11,7 @@ from .models import (
     Clarification,
     FinancialYear,
     PlanLine,
+    PrequalificationApplicant,
     ProcurementPlan,
     ProcurementRecord,
     RecordFlag,
@@ -35,9 +36,11 @@ from .services import (
     get_current_solicitation,
     prepare_solicitation,
     publish_advertisement,
+    record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
     reject_solicitation,
+    review_prequalification_applicant,
     review_requisition_packaging,
     submit_clarification_question,
     submit_plan,
@@ -982,6 +985,137 @@ class ClarificationTests(TestCase):
         self.assertEqual(clarification.answer, 'A.')
 
 
+class PrequalificationTests(TestCase):
+    """Staff-recorded EOI/prequalification tracking (blueprint step 07's
+    other half). Not gated by procurement method — see
+    PrequalificationApplicant's docstring in models.py."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_preq', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_preq', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_preq', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_preq', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+    def publish(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        closing = datetime.date.today() + datetime.timedelta(days=30)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=closing,
+        )
+        return solicitation
+
+    def test_record_applicant_requires_published_solicitation(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        with self.assertRaises(ValidationError):
+            record_prequalification_applicant(
+                solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+            )
+
+    def test_record_applicant_requires_vendor_name(self):
+        solicitation = self.publish()
+        with self.assertRaises(ValidationError):
+            record_prequalification_applicant(solicitation=solicitation, actor=self.preparer, vendor_name='   ')
+
+    def test_review_requires_note(self):
+        solicitation = self.publish()
+        applicant = record_prequalification_applicant(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+        )
+        with self.assertRaises(ValidationError):
+            review_prequalification_applicant(
+                applicant=applicant, actor=self.preparer, outcome=PrequalificationApplicant.Outcome.QUALIFIED, note=''
+            )
+
+    def test_review_twice_raises(self):
+        solicitation = self.publish()
+        applicant = record_prequalification_applicant(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+        )
+        review_prequalification_applicant(
+            applicant=applicant, actor=self.preparer,
+            outcome=PrequalificationApplicant.Outcome.QUALIFIED, note='Meets registration requirements.',
+        )
+        with self.assertRaises(ValidationError):
+            review_prequalification_applicant(
+                applicant=applicant, actor=self.preparer,
+                outcome=PrequalificationApplicant.Outcome.NOT_QUALIFIED, note='Changed my mind.',
+            )
+
+    def test_pending_applicant_not_publicly_visible(self):
+        solicitation = self.publish()
+        record_prequalification_applicant(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+        )
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertNotContains(response, 'Acme Furniture Ltd')
+
+    def test_full_happy_path_reviewed_outcome_visible_publicly(self):
+        solicitation = self.publish()
+        applicant = record_prequalification_applicant(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+        )
+        review_prequalification_applicant(
+            applicant=applicant, actor=self.preparer,
+            outcome=PrequalificationApplicant.Outcome.QUALIFIED, note='Meets registration requirements.',
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='prequalificationapplicant',
+                action=AuditEvent.Action.PREQUALIFICATION_REVIEWED,
+            ).exists()
+        )
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, 'Acme Furniture Ltd')
+        self.assertNotContains(response, 'Meets registration requirements.')  # review note stays staff-only
+
+    def test_add_applicant_view_rejects_wrong_role(self):
+        solicitation = self.publish()
+        self.client.force_login(self.requester)
+        response = self.client.post(
+            reverse('staff_prequalification_add', args=[solicitation.id]), {'vendor_name': 'Acme Furniture Ltd'}
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_applicant_view_allows_procurement_unit(self):
+        solicitation = self.publish()
+        self.client.force_login(self.preparer)
+        response = self.client.post(
+            reverse('staff_prequalification_add', args=[solicitation.id]), {'vendor_name': 'Acme Furniture Ltd'}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(solicitation.prequalification_applicants.count(), 1)
+
+
 class SolicitationViewRoleGateTests(TestCase):
     def setUp(self):
         self.law_profile = make_law_profile()
@@ -1043,4 +1177,13 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_add_permission(request=None))
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in Clarification._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_prequalification_admin_has_no_add_permission(self):
+        from .admin import PrequalificationApplicantAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = PrequalificationApplicantAdmin(PrequalificationApplicant, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in PrequalificationApplicant._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)

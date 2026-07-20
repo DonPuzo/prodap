@@ -262,3 +262,16 @@ class ClarificationQuestionForm(forms.Form):
 
 class ClarificationAnswerForm(forms.Form):
     answer = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)
+
+
+class PrequalificationApplicantForm(forms.Form):
+    vendor_name = forms.CharField(max_length=255, required=True)
+    vendor_registration_no = forms.CharField(max_length=100, required=False)
+
+
+class PrequalificationReviewForm(forms.Form):
+    outcome = forms.ChoiceField(choices=[
+        ('qualified', 'Qualified'),
+        ('not_qualified', 'Not Qualified'),
+    ])
+    note = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)
