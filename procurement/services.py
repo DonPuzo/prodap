@@ -103,7 +103,29 @@ def reject_plan(*, plan, actor, reason):
     return plan
 
 
+def _require_plan_line_pending(plan_line):
+    if plan_line.status != PlanLine.Status.PENDING:
+        raise ValidationError(
+            f'This plan line is already {plan_line.get_status_display().lower()} — '
+            'only a pending line can be approved or rejected.'
+        )
+
+
+def _require_plan_line_still_approved(plan_line):
+    """Every downstream gate re-checks this, not just submit_requisition —
+    a line can be rejected (or superseded) after a requisition was created
+    against it but before that requisition finished its own gates, and
+    every later step must refuse to proceed on a line that is no longer
+    approved (security review finding, Phase 1-Foundation)."""
+    if plan_line.status != PlanLine.Status.APPROVED:
+        raise ValidationError(
+            f'The plan line behind this requisition is {plan_line.get_status_display().lower()}, '
+            'not approved — this requisition cannot proceed.'
+        )
+
+
 def approve_plan_line(*, plan_line, actor, note=''):
+    _require_plan_line_pending(plan_line)
     if actor.pk == plan_line.proposed_by_id:
         raise SeparationOfDutiesError('You cannot approve a plan line you proposed yourself.')
     with transaction.atomic():
@@ -116,6 +138,7 @@ def approve_plan_line(*, plan_line, actor, note=''):
 def reject_plan_line(*, plan_line, actor, reason):
     if not reason.strip():
         raise ValidationError('A reason is required to reject a plan line.')
+    _require_plan_line_pending(plan_line)
     with transaction.atomic():
         plan_line.status = PlanLine.Status.REJECTED
         plan_line.save(update_fields=['status'])
@@ -124,11 +147,9 @@ def reject_plan_line(*, plan_line, actor, reason):
 
 
 def submit_requisition(*, requisition, actor):
-    if requisition.plan_line.status != PlanLine.Status.APPROVED:
-        raise ValidationError(
-            'Only an approved plan line may initiate a procurement requisition, '
-            'except through a formally approved plan amendment.'
-        )
+    if requisition.status != Requisition.Status.DRAFT:
+        raise ValidationError(f'This requisition is already {requisition.get_status_display().lower()}.')
+    _require_plan_line_still_approved(requisition.plan_line)
     with transaction.atomic():
         requisition.status = Requisition.Status.SUBMITTED
         requisition.submitted_at = timezone.now()
@@ -149,6 +170,12 @@ def _next_process_identifier(*, law_profile, financial_year):
 
 
 def confirm_requisition_funds(*, requisition, actor, note=''):
+    if requisition.status != Requisition.Status.SUBMITTED:
+        raise ValidationError(
+            f'This requisition is {requisition.get_status_display().lower()}, not submitted — '
+            'it must be submitted before funds can be confirmed.'
+        )
+    _require_plan_line_still_approved(requisition.plan_line)
     if actor.pk == requisition.requested_by_id:
         raise SeparationOfDutiesError('You cannot confirm funds for a requisition you created yourself.')
     with transaction.atomic():
@@ -171,6 +198,8 @@ def confirm_requisition_funds(*, requisition, actor, note=''):
 def decline_requisition_funds(*, requisition, actor, reason):
     if not reason.strip():
         raise ValidationError('A reason is required to decline funding.')
+    if requisition.status != Requisition.Status.SUBMITTED:
+        raise ValidationError(f'This requisition is {requisition.get_status_display().lower()}, not submitted.')
     with transaction.atomic():
         requisition.status = Requisition.Status.FUNDS_DECLINED
         requisition.funds_confirmation_note = reason
@@ -184,6 +213,9 @@ def review_requisition_packaging(*, requisition, actor, note):
     decision, not automated pattern detection (that's Phase 5)."""
     if not note.strip():
         raise ValidationError('A written packaging/anti-splitting review note is required.')
+    if requisition.status != Requisition.Status.FUNDS_CONFIRMED:
+        raise ValidationError('Funds must be confirmed before the packaging/anti-splitting review.')
+    _require_plan_line_still_approved(requisition.plan_line)
     with transaction.atomic():
         requisition.packaging_reviewed = True
         requisition.packaging_review_note = note
@@ -243,8 +275,11 @@ def get_approving_authority(*, law_profile, method, value, as_of=None):
 
 
 def determine_requisition_method(*, requisition, actor, method_override='', override_justification=''):
+    if requisition.status != Requisition.Status.FUNDS_CONFIRMED:
+        raise ValidationError('Funds must be confirmed before method determination.')
     if not requisition.packaging_reviewed:
         raise ValidationError('Packaging/anti-splitting review must be completed before method determination.')
+    _require_plan_line_still_approved(requisition.plan_line)
     law_profile = requisition.plan_line.plan.law_profile
     if method_override:
         if not override_justification.strip():
@@ -288,6 +323,7 @@ def create_record_from_requisition(*, requisition, actor, record_fields):
         raise ValidationError('Packaging/anti-splitting review must be completed first.')
     if not requisition.determined_method:
         raise ValidationError('Procurement method must be determined first.')
+    _require_plan_line_still_approved(requisition.plan_line)
     with transaction.atomic():
         record = ProcurementRecord.objects.create(
             requisition=requisition,

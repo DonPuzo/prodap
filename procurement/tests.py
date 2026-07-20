@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .forms import ProcurementRecordForm
+from .forms import ProcurementRecordForm, RequisitionForm
 from .models import (
     AuditEvent,
     FinancialYear,
@@ -21,12 +21,14 @@ from .models import LawProfile
 from .services import (
     SeparationOfDutiesError,
     approve_plan,
+    approve_plan_line,
     confirm_requisition_funds,
     create_record_from_requisition,
     determine_default_method,
     determine_requisition_method,
     get_approving_authority,
     reject_plan,
+    reject_plan_line,
     review_requisition_packaging,
     submit_plan,
     submit_requisition,
@@ -562,3 +564,131 @@ class AuditEventTests(TestCase):
         self.assertEqual(event.action, AuditEvent.Action.PLAN_SUBMITTED)
         self.assertEqual(event.actor, self.preparer)
         self.assertEqual(event.role_at_time, User.Role.PROCUREMENT_UNIT)
+
+
+class GateOrderEnforcementTests(TestCase):
+    """Security review regression tests: every downstream gate re-verifies
+    plan_line/requisition status, and approve/reject refuse to act twice.
+    Without these checks, a requisition could be walked through funds
+    confirmation, packaging review, and record creation even after its
+    plan line was rejected out from under it, or before it was ever
+    submitted — see services.py _require_plan_line_still_approved."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_gate', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_gate', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_gate', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_gate', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000)
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+    def make_requisition(self):
+        return Requisition.objects.create(
+            plan_line=self.line, title='Chairs', department='Bursary', requested_value=500_000,
+            budget_source=ProcurementRecord.BudgetSource.IGR, requested_by=self.requester,
+        )
+
+    def test_reject_plan_line_refuses_on_already_approved_line(self):
+        with self.assertRaises(ValidationError):
+            reject_plan_line(plan_line=self.line, actor=self.approver, reason='changed mind')
+
+    def test_approve_plan_line_refuses_on_already_approved_line(self):
+        with self.assertRaises(ValidationError):
+            approve_plan_line(plan_line=self.line, actor=self.approver)
+
+    def test_confirm_funds_refuses_unsubmitted_requisition(self):
+        requisition = self.make_requisition()
+        with self.assertRaises(ValidationError):
+            confirm_requisition_funds(requisition=requisition, actor=self.finance)
+
+    def test_packaging_review_refuses_before_funds_confirmed(self):
+        requisition = self.make_requisition()
+        submit_requisition(requisition=requisition, actor=self.requester)
+        with self.assertRaises(ValidationError):
+            review_requisition_packaging(requisition=requisition, actor=self.preparer, note='checked')
+
+    def test_downstream_gate_refuses_when_plan_line_no_longer_approved(self):
+        requisition = self.make_requisition()
+        submit_requisition(requisition=requisition, actor=self.requester)
+        confirm_requisition_funds(requisition=requisition, actor=self.finance)
+
+        # Simulate the plan line becoming non-approved by some other means
+        # after the requisition already passed funds confirmation - the
+        # exact scenario the security review flagged.
+        self.line.status = PlanLine.Status.REJECTED
+        self.line.save(update_fields=['status'])
+
+        with self.assertRaises(ValidationError):
+            review_requisition_packaging(requisition=requisition, actor=self.preparer, note='checked')
+
+
+class RequisitionValueValidationTests(TestCase):
+    """Security review regression: a requisition's value/department must
+    match what was actually approved on its plan line — otherwise the
+    entire point of the plan-approval gate is defeated."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_val', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.requester = User.objects.create_user(username='ru_val', password='x', role=User.Role.REQUESTING_UNIT)
+        self.approver = User.objects.create_user(username='ao_val', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Stationery', justification='need',
+            estimated_cost=10_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+    def test_model_clean_rejects_value_exceeding_approved_estimate(self):
+        req = Requisition(
+            plan_line=self.line, title='Inflated', department='Bursary', requested_value=50_000_000,
+            budget_source=ProcurementRecord.BudgetSource.IGR, requested_by=self.requester,
+        )
+        with self.assertRaises(ValidationError):
+            req.full_clean()
+
+    def test_model_clean_accepts_value_within_approved_estimate(self):
+        req = Requisition(
+            plan_line=self.line, title='Reasonable', department='Bursary', requested_value=9_500,
+            budget_source=ProcurementRecord.BudgetSource.IGR, requested_by=self.requester,
+        )
+        req.full_clean()  # should not raise
+
+    def test_model_clean_rejects_mismatched_department(self):
+        req = Requisition(
+            plan_line=self.line, title='Wrong dept', department='Faculty of Science', requested_value=9_500,
+            budget_source=ProcurementRecord.BudgetSource.IGR, requested_by=self.requester,
+        )
+        with self.assertRaises(ValidationError):
+            req.full_clean()
+
+    def test_form_rejects_value_exceeding_approved_estimate(self):
+        form = RequisitionForm(data={
+            'plan_line': self.line.pk, 'title': 'Inflated Requisition', 'requested_value': '50000000',
+            'budget_source': ProcurementRecord.BudgetSource.IGR,
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('requested_value', form.errors)
+
+    def test_form_derives_department_from_plan_line_not_user_input(self):
+        form = RequisitionForm(data={
+            'plan_line': self.line.pk, 'title': 'Stationery Requisition', 'requested_value': '9500',
+            'budget_source': ProcurementRecord.BudgetSource.IGR,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        requisition = form.save(commit=False)
+        self.assertEqual(requisition.department, 'Bursary')

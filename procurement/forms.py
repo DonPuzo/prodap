@@ -110,9 +110,14 @@ class PlanLineForm(forms.ModelForm):
 
 
 class RequisitionForm(forms.ModelForm):
+    # department is deliberately NOT user-entered — it's always derived
+    # from the chosen plan_line (see clean() below) so a requisition can
+    # never be misattributed to a different department than the one whose
+    # budget line was actually approved (security review finding,
+    # Phase 1-Foundation: forms.py used to let this be freely typed).
     class Meta:
         model = Requisition
-        fields = ['plan_line', 'title', 'department', 'requested_value', 'budget_source']
+        fields = ['plan_line', 'title', 'requested_value', 'budget_source']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -121,6 +126,17 @@ class RequisitionForm(forms.ModelForm):
         # unapproved line from a stale page (build prompt v2 discipline:
         # enforce gates at the data layer, not just the UI).
         self.fields['plan_line'].queryset = PlanLine.objects.filter(status=PlanLine.Status.APPROVED)
+
+    def clean(self):
+        cleaned = super().clean()
+        plan_line = cleaned.get('plan_line')
+        if plan_line:
+            # Set here (not left to construct_instance) so Requisition.clean()
+            # — run next, during _post_clean() — validates against the real
+            # value, and so requested_value > plan_line.estimated_cost surfaces
+            # as a normal form error instead of an uncaught exception.
+            self.instance.department = plan_line.department
+        return cleaned
 
 
 class FundsConfirmationForm(forms.Form):

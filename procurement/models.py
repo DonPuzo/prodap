@@ -395,6 +395,30 @@ class Requisition(models.Model):
     class Meta:
         ordering = ['-created_at']
 
+    def clean(self):
+        # A requisition must stay inside what the accounting_officer
+        # actually approved on the plan line — without this, the entire
+        # point of the plan-approval gate is defeated (security review
+        # finding, Phase 1-Foundation). department is form-derived from
+        # plan_line (see forms.RequisitionForm) but validated here too as
+        # defense-in-depth against any other code path creating one.
+        if self.plan_line_id and self.requested_value is not None:
+            if self.requested_value > self.plan_line.estimated_cost:
+                raise ValidationError({
+                    'requested_value': (
+                        f'Requested value (₦{self.requested_value}) exceeds the approved plan '
+                        f'line estimate (₦{self.plan_line.estimated_cost}). Requesting more than '
+                        'what was approved needs a formally approved plan amendment first.'
+                    )
+                })
+        if self.plan_line_id and self.department and self.department != self.plan_line.department:
+            raise ValidationError({
+                'department': (
+                    f'Department ("{self.department}") does not match the approved plan '
+                    f'line\'s department ("{self.plan_line.department}").'
+                )
+            })
+
     def __str__(self):
         return self.title
 
