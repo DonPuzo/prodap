@@ -44,6 +44,50 @@ STRINGS = {
         'flag_count_zero': 'No one has flagged this project yet.',
         'flag_count_suffix': 'on this project — visible to procurement staff.',
         'already_flagged': "You've already flagged this project from this browser.",
+        'back_to_register': 'Back to register',
+        'register_heading': 'Procurement Register',
+        'nav_home': 'Home',
+        'nav_register': 'Register',
+        'nav_about': 'About',
+        'hero_lead': (
+            'publishes every contract, tender, and project it procures — tracked from planning '
+            'through completion. No login required, and every status change on this platform is '
+            'permanently logged.'
+        ),
+        'total_projects': 'Total Projects',
+        'hero_heading': 'Public Procurement, Made Transparent',
+        'audience_public_heading': 'Public & Citizens',
+        'audience_public_body': 'Search and browse every procurement record, see current status, and flag anything that looks concerning.',
+        'audience_public_cta': 'Browse the register',
+        'audience_oversight_heading': 'Oversight, Press & Researchers',
+        'audience_oversight_body': 'Download the full dataset for independent analysis — the same data shown on this site, machine-readable.',
+        'audience_staff_heading': 'Institution Staff',
+        'audience_staff_body': 'Log in to manage annual plans, requisitions, solicitations, and procurement records.',
+        'audience_staff_cta': 'Staff login',
+        'how_it_works_heading': 'How procurement works here',
+        'how_it_works_intro': 'Every project moves through the same statutory stages, in order:',
+        'learn_more': 'Learn how this process works',
+        'about_heading': 'About ProDAP',
+        'about_intro': (
+            'ProDAP (Procurement Digital Application Platform) is a public procurement '
+            'transparency register. It publishes every stage of a procurement process as it '
+            'happens — not a retrospective report — so anyone can see what is being bought, '
+            'from whom, for how much, and where the process currently stands.'
+        ),
+        'about_status_heading': 'What each status means',
+        'about_flagging_heading': 'Public scrutiny',
+        'about_flagging_body': (
+            'Anyone can flag a project as concerning directly from its detail page, no login '
+            'required. Flags are visible to both the public and procurement staff — scrutiny '
+            'stays visible instead of disappearing into a moderation queue.'
+        ),
+        'about_accessibility_heading': 'Accessibility & language',
+        'about_accessibility_body': (
+            'High-contrast mode and adjustable text size are available from the top toolbar on '
+            'every page, alongside an English/Pidgin language toggle.'
+        ),
+        'about_data_heading': 'Open data',
+        'about_data_body': 'The complete dataset behind this register is downloadable at any time, in JSON or CSV.',
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -81,6 +125,50 @@ STRINGS = {
         'flag_count_zero': 'Nobody don flag dis project yet.',
         'flag_count_suffix': 'dey for dis project — procurement people go see am.',
         'already_flagged': 'You don already flag dis project from dis browser.',
+        'back_to_register': 'Go back to register',
+        'register_heading': 'Procurement Register',
+        'nav_home': 'Home',
+        'nav_register': 'Register',
+        'nav_about': 'About',
+        'hero_lead': (
+            'dey publish every contract, tender, and project wey e dey buy — we dey track am '
+            'from planning reach finish. No login need, and every status change wey happen for '
+            'dis platform dey saved forever.'
+        ),
+        'total_projects': 'All Projects',
+        'hero_heading': 'Public Procurement, Wey You Fit See',
+        'audience_public_heading': 'Public & Citizens',
+        'audience_public_body': 'Search and see every procurement record, check current status, and flag anything wey dey fishy.',
+        'audience_public_cta': 'Go to di register',
+        'audience_oversight_heading': 'Oversight, Press & Researchers',
+        'audience_oversight_body': 'Download di whole data make you fit analyze am yourself — na di same data wey dey dis site, but machine-readable.',
+        'audience_staff_heading': 'Institution Staff',
+        'audience_staff_body': 'Login make you fit manage annual plans, requisitions, solicitations, and procurement records.',
+        'audience_staff_cta': 'Staff Login',
+        'how_it_works_heading': 'How procurement dey work here',
+        'how_it_works_intro': 'Every project dey pass through di same stages, one by one:',
+        'learn_more': 'Learn how dis process dey work',
+        'about_heading': 'About ProDAP',
+        'about_intro': (
+            'ProDAP (Procurement Digital Application Platform) na public procurement '
+            'transparency register. E dey publish every stage of procurement process as e dey '
+            'happen — no be after-the-fact report — so anybody fit see wetin dem dey buy, from '
+            'who, how much, and where di process reach now.'
+        ),
+        'about_status_heading': 'Wetin each status mean',
+        'about_flagging_heading': 'Public Watch',
+        'about_flagging_body': (
+            'Anybody fit flag project as fishy straight from di project page, no login need. '
+            'Flags dey visible to both public and procurement staff — so scrutiny no go '
+            'disappear inside queue.'
+        ),
+        'about_accessibility_heading': 'Accessibility & Language',
+        'about_accessibility_body': (
+            'High-contrast mode and text size wey you fit change dey available for di top bar '
+            'on every page, plus English/Pidgin language switch.'
+        ),
+        'about_data_heading': 'Open Data',
+        'about_data_body': 'Di full data behind dis register dey available to download anytime, as JSON or CSV.',
     },
 }
 

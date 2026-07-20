@@ -4,8 +4,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Public dashboard — no auth, ever.
+    # Public pages — no auth, ever.
     path('', views.public_dashboard, name='public_dashboard'),
+    path('register/', views.public_register, name='public_register'),
+    path('about/', views.public_about, name='public_about'),
     path('projects/<uuid:pk>/', views.public_record_detail, name='public_record_detail'),
     path('projects/<uuid:pk>/flag/', views.flag_record, name='flag_record'),
     path('export/data.json', views.export_json, name='export_json'),

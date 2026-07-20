@@ -38,6 +38,11 @@
       </a>
     {% endif %}
   </div>
+  <div class="a11y-bar public-nav" aria-label="Site navigation">
+    <a href="{% url 'public_dashboard' %}">{{ ui.nav_home }}</a>
+    <a href="{% url 'public_register' %}">{{ ui.nav_register }}</a>
+    <a href="{% url 'public_about' %}">{{ ui.nav_about }}</a>
+  </div>
   {% if user.is_authenticated %}
   <div class="a11y-bar staff-nav" aria-label="Staff navigation">
     <a href="{% url 'staff_record_list' %}">Records</a>

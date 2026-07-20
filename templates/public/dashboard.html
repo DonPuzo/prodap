@@ -2,7 +2,16 @@
 {% load humanize %}
 {% block content %}
 
+<section class="hero">
+  <h2>{{ ui.hero_heading }}</h2>
+  <p class="hero-lead">{{ tenant_name }} {{ ui.hero_lead }}</p>
+</section>
+
 <div class="stats">
+  <div class="stat-card">
+    <div class="value">{{ total_count }}</div>
+    <div class="label">{{ ui.total_projects }}</div>
+  </div>
   <div class="stat-card">
     <div class="value">{{ active_count }}</div>
     <div class="label">{{ ui.active_projects }}</div>
@@ -13,73 +22,38 @@
   </div>
 </div>
 
-<form class="filters" method="get">
-  <div class="search-field">
-    <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-    <input type="text" name="q" value="{{ query }}" placeholder="{{ ui.search_placeholder }}">
+<div class="audience-cards">
+  <div class="audience-card">
+    <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>
+    <h3>{{ ui.audience_public_heading }}</h3>
+    <p>{{ ui.audience_public_body }}</p>
+    <a class="btn" href="{% url 'public_register' %}">{{ ui.audience_public_cta }}</a>
   </div>
-  <select name="status">
-    <option value="">{{ ui.status }}: {{ ui.all }}</option>
-    {% for value, label in status_choices %}
-      <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
-    {% endfor %}
-  </select>
-  <select name="budget_source">
-    <option value="">{{ ui.budget_source }}: {{ ui.all }}</option>
-    {% for value, label in budget_source_choices %}
-      <option value="{{ value }}" {% if budget_source == value %}selected{% endif %}>{{ label }}</option>
-    {% endfor %}
-  </select>
-  <button class="btn" type="submit">{{ ui.search }}</button>
-</form>
-
-{% if page.object_list %}
-<p class="result-count">{{ page.paginator.count }} project{{ page.paginator.count|pluralize }} found</p>
-<table class="record-list">
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>{{ ui.department }}</th>
-      <th>{{ ui.budget_source }}</th>
-      <th>{{ ui.cost }}</th>
-      <th>{{ ui.status }}</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for record in page.object_list %}
-    <tr>
-      <td data-label="Title"><a class="title-link" href="{% url 'public_record_detail' record.id %}">{{ record.title }}</a></td>
-      <td data-label="{{ ui.department }}">{{ record.department }}</td>
-      <td data-label="{{ ui.budget_source }}">{{ record.budget_source }}</td>
-      <td data-label="{{ ui.cost }}">₦{{ record.display_cost|floatformat:0|intcomma }}</td>
-      <td data-label="{{ ui.status }}"><span class="badge badge-{{ record.status|lower }}">{{ record.status }}</span></td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-
-{% if page.has_other_pages %}
-<nav class="page-nav">
-  <span>
-  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}&q={{ query }}&status={{ status }}&budget_source={{ budget_source }}">&laquo; Prev</a>{% endif %}
-  </span>
-  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
-  <span>
-  {% if page.has_next %}<a href="?page={{ page.next_page_number }}&q={{ query }}&status={{ status }}&budget_source={{ budget_source }}">Next &raquo;</a>{% endif %}
-  </span>
-</nav>
-{% endif %}
-
-{% else %}
-<div class="empty-state">
-  <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-  <p>{{ ui.no_records }}</p>
+  <div class="audience-card">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+    <h3>{{ ui.audience_oversight_heading }}</h3>
+    <p>{{ ui.audience_oversight_body }}</p>
+    <div class="export-links">
+      {{ ui.download_data }}: <a href="{% url 'export_json' %}">JSON</a> · <a href="{% url 'export_csv' %}">CSV</a>
+    </div>
+  </div>
+  <div class="audience-card">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+    <h3>{{ ui.audience_staff_heading }}</h3>
+    <p>{{ ui.audience_staff_body }}</p>
+    <a class="btn btn-secondary" href="{% url 'staff_login' %}">{{ ui.audience_staff_cta }}</a>
+  </div>
 </div>
-{% endif %}
 
-<div class="export-links">
-  <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-  {{ ui.download_data }}: <a href="{% url 'export_json' %}">JSON</a> · <a href="{% url 'export_csv' %}">CSV</a>
-</div>
+<section class="steps-section">
+  <h3>{{ ui.how_it_works_heading }}</h3>
+  <p>{{ ui.how_it_works_intro }}</p>
+  <ol class="steps-list">
+    {% for value, label in progress_statuses %}
+    <li><span class="badge badge-{{ value|lower }}">{{ label }}</span></li>
+    {% endfor %}
+  </ol>
+  <p><a href="{% url 'public_about' %}">{{ ui.learn_more }} &raquo;</a></p>
+</section>
 
 {% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ ui.about_heading }} — {{ tenant_name }}{% endblock %}
+{% block content %}
+
+<h2>{{ ui.about_heading }}</h2>
+<p class="detail-description">{{ ui.about_intro }}</p>
+
+<h3>{{ ui.about_status_heading }}</h3>
+<ul class="timeline">
+  {% for value, label in status_choices %}
+  <li>
+    <span class="badge badge-{{ value|lower }}">{{ label }}</span>
+  </li>
+  {% endfor %}
+</ul>
+
+<div class="flag-box">
+  <h3>{{ ui.about_flagging_heading }}</h3>
+  <p>{{ ui.about_flagging_body }}</p>
+</div>
+
+<div class="flag-box">
+  <h3>{{ ui.about_accessibility_heading }}</h3>
+  <p>{{ ui.about_accessibility_body }}</p>
+</div>
+
+<div class="flag-box">
+  <h3>{{ ui.about_data_heading }}</h3>
+  <p>{{ ui.about_data_body }}</p>
+  <div class="export-links">
+    {{ ui.download_data }}: <a href="{% url 'export_json' %}">JSON</a> · <a href="{% url 'export_csv' %}">CSV</a>
+  </div>
+</div>
+
+<p><a href="{% url 'public_register' %}">{{ ui.audience_public_cta }} &raquo;</a></p>
+
+{% endblock %}

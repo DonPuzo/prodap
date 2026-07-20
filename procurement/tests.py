@@ -224,10 +224,25 @@ class PublicAccessTests(TestCase):
         self.record = make_record(self.law_profile, self.actor)
         self.client = Client()
 
-    def test_dashboard_accessible_without_login(self):
+    def test_landing_page_accessible_without_login(self):
         response = self.client.get(reverse('public_dashboard'))
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Browse the register')  # audience card CTA, landing-page-specific
+        self.assertNotContains(response, self.record.title)  # no raw table on the landing page
+
+    def test_register_page_accessible_without_login_and_lists_records(self):
+        response = self.client.get(reverse('public_register'))
+        self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.record.title)
+
+    def test_register_page_search_still_works(self):
+        response = self.client.get(reverse('public_register'), {'q': self.record.title})
+        self.assertContains(response, self.record.title)
+
+    def test_about_page_accessible_without_login(self):
+        response = self.client.get(reverse('public_about'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Planning')
 
     def test_detail_page_accessible_without_login(self):
         response = self.client.get(reverse('public_record_detail', args=[self.record.id]))

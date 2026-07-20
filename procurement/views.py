@@ -78,7 +78,38 @@ ACTIVE_STATUSES = [
 ]
 
 
+def _headline_stats():
+    """Shared by the landing page and the register — same numbers, just
+    presented as a hook on one page and in context on the other."""
+    all_records = ProcurementRecord.objects.all()
+    active_count = all_records.filter(status__in=ACTIVE_STATUSES).count()
+    total_value = sum((r.display_cost or 0) for r in all_records)
+    total_count = all_records.count()
+    return active_count, total_value, total_count
+
+
 def public_dashboard(request):
+    """The landing page — explains what ProDAP is before showing any data.
+    The actual browsable register lives at public_register; this page's job
+    is orientation and audience-based routing (public/oversight/staff), not
+    search (see build prompt v2 section 7B / homepage research)."""
+    active_count, total_value, total_count = _headline_stats()
+    # Abandoned is a terminal exception, not a step in the normal sequence —
+    # excluded from the linear teaser here (the About page's glossary still
+    # covers every status, including Abandoned).
+    progress_statuses = [
+        (value, label) for value, label in ProcurementRecord.Status.choices
+        if value != ProcurementRecord.Status.ABANDONED
+    ]
+    return render(request, 'public/dashboard.html', {
+        'active_count': active_count,
+        'total_value': total_value,
+        'total_count': total_count,
+        'progress_statuses': progress_statuses,
+    })
+
+
+def public_register(request):
     records = ProcurementRecord.objects.select_related('law_profile').all()
 
     query = request.GET.get('q', '').strip()
@@ -93,14 +124,12 @@ def public_dashboard(request):
     if budget_source:
         records = records.filter(budget_source=budget_source)
 
-    all_records = ProcurementRecord.objects.all()
-    active_count = all_records.filter(status__in=ACTIVE_STATUSES).count()
-    total_value = sum((r.display_cost or 0) for r in all_records)
+    active_count, total_value, _ = _headline_stats()
 
     paginator = Paginator(records, 20)
     page = paginator.get_page(request.GET.get('page'))
 
-    return render(request, 'public/dashboard.html', {
+    return render(request, 'public/register.html', {
         'page': page,
         'query': query,
         'status': status,
@@ -109,6 +138,14 @@ def public_dashboard(request):
         'budget_source_choices': ProcurementRecord.BudgetSource.choices,
         'active_count': active_count,
         'total_value': total_value,
+    })
+
+
+def public_about(request):
+    """Static explainer + status glossary — reuses ProcurementRecord.Status
+    as the single source of truth rather than hardcoding the list again."""
+    return render(request, 'public/about.html', {
+        'status_choices': ProcurementRecord.Status.choices,
     })
 
 
