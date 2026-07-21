@@ -371,19 +371,23 @@ def staff_record_edit(request, pk):
 @login_required
 def staff_status_transition(request, pk):
     record = get_object_or_404(ProcurementRecord, pk=pk)
+    error = None
     if request.method == 'POST':
         form = StatusTransitionForm(request.POST, current_status=record.status)
         if form.is_valid():
-            transition_status(
-                record=record,
-                new_status=form.cleaned_data['new_status'],
-                updated_by=request.user,
-                note=form.cleaned_data['note'],
-            )
-            return redirect('staff_record_list')
+            try:
+                transition_status(
+                    record=record,
+                    new_status=form.cleaned_data['new_status'],
+                    updated_by=request.user,
+                    note=form.cleaned_data['note'],
+                )
+                return redirect('staff_record_list')
+            except ValidationError as exc:
+                error = exc.message
     else:
         form = StatusTransitionForm(current_status=record.status)
-    return render(request, 'staff/status_transition.html', {'form': form, 'record': record})
+    return render(request, 'staff/status_transition.html', {'form': form, 'record': record, 'error': error})
 
 
 # --- Phase 1-Foundation: annual plans -> requisitions -> funds confirmation

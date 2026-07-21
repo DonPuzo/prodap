@@ -1471,6 +1471,133 @@ class ComplaintTests(TestCase):
         self.assertEqual(self.record.complaints.count(), 1)
 
 
+class ComplaintHoldTests(TestCase):
+    """Acceptance checklist: "Complaints and suspension instructions freeze
+    the affected workflow" (E-Procurement Platform Integration Framework,
+    p.11/18). An unresolved complaint must block every status transition —
+    manual or evidence-gated — on its record, until resolved."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_hold', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_hold', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_hold', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_hold', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+        self.solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=self.solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=self.solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        self.solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        self.solicitation.advertisement.save(update_fields=['closing_date'])
+        self.bid = record_bid(
+            solicitation=self.solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000
+        )
+
+    def file_complaint(self):
+        return submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concerned the process was rushed.',
+        )
+
+    def test_award_blocked_while_complaint_pending(self):
+        self.file_complaint()
+        with self.assertRaises(ValidationError):
+            award_solicitation(
+                solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid,
+                decision_note='Lowest evaluated bid.',
+            )
+
+    def test_manual_transition_blocked_while_complaint_pending(self):
+        self.file_complaint()
+        with self.assertRaises(ValidationError):
+            transition_status(record=self.record, new_status='Tendering', updated_by=self.preparer)
+
+    def test_sign_contract_blocked_while_complaint_pending(self):
+        award = award_solicitation(
+            solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid,
+            decision_note='Lowest evaluated bid.',
+        )
+        self.file_complaint()
+        with self.assertRaises(ValidationError):
+            sign_contract(
+                award=award, actor=self.preparer, contract_reference='CT-HOLD-1',
+                vendor_signatory_name='Acme MD', signed_date=datetime.date.today(),
+                start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+            )
+
+    def test_complete_contract_blocked_while_complaint_pending(self):
+        award = award_solicitation(
+            solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid,
+            decision_note='Lowest evaluated bid.',
+        )
+        contract = sign_contract(
+            award=award, actor=self.preparer, contract_reference='CT-HOLD-2',
+            vendor_signatory_name='Acme MD', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+        self.file_complaint()
+        with self.assertRaises(ValidationError):
+            complete_contract(contract=contract, actor=self.approver, completion_date=datetime.date.today(), inspection_note='Done.')
+
+    def test_workflow_resumes_once_complaint_resolved(self):
+        complaint = self.file_complaint()
+        with self.assertRaises(ValidationError):
+            award_solicitation(
+                solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid,
+                decision_note='Lowest evaluated bid.',
+            )
+        resolve_complaint(
+            complaint=complaint, actor=self.approver, status=Complaint.Status.DISMISSED,
+            resolution_note='Reviewed — timeline complied with the minimum bidding period.',
+        )
+        award = award_solicitation(
+            solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid,
+            decision_note='Lowest evaluated bid.',
+        )
+        self.assertIsNotNone(award.pk)
+
+    def test_staff_status_transition_view_shows_error_not_crash(self):
+        self.file_complaint()
+        self.client.force_login(self.preparer)
+        response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
+            'new_status': 'Tendering', 'note': 'Attempted during complaint hold.',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'unresolved complaint')
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'Advertised')
+
+
 class ContractMilestoneTests(TestCase):
     """Contract signing & milestone tracking (blueprint Phase 4, first
     slice). Setup walks all the way to a real Award, same chain as

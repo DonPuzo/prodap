@@ -34,6 +34,20 @@ class SeparationOfDutiesError(ValidationError):
     payment on the same transaction" independent of role assignment."""
 
 
+def _require_no_pending_complaint(record):
+    """Blueprint acceptance checklist: "Complaints and suspension
+    instructions freeze the affected workflow." An unresolved complaint
+    blocks every status transition on its record — called both here
+    (the universal choke point every transition passes through, manual or
+    evidence-gated) and, fail-fast, at the top of award_solicitation/
+    sign_contract/complete_contract so the error surfaces before any work
+    is done."""
+    if record.complaints.filter(status=Complaint.Status.PENDING).exists():
+        raise ValidationError(
+            'This record has an unresolved complaint — the workflow is frozen until it is resolved.'
+        )
+
+
 def transition_status(*, record, new_status, updated_by, note=''):
     """The only sanctioned way to change a ProcurementRecord's status.
 
@@ -41,6 +55,7 @@ def transition_status(*, record, new_status, updated_by, note=''):
     never allow a direct status field update that bypasses this (see
     PRODAP_AGENT_BUILD_PROMPT_V2.md section 3.6).
     """
+    _require_no_pending_complaint(record)
     old_status = record.status
     with transaction.atomic():
         record.status = new_status
@@ -563,6 +578,7 @@ def award_solicitation(
     bpp_no_objection_reference='', bpp_no_objection_date=None,
 ):
     record = solicitation.record
+    _require_no_pending_complaint(record)
     if record.status not in (ProcurementRecord.Status.ADVERTISED, ProcurementRecord.Status.TENDERING):
         raise ValidationError(f'This record is {record.status} — an award cannot be decided from this status.')
     if hasattr(solicitation, 'award'):
@@ -650,6 +666,7 @@ def resolve_complaint(*, complaint, actor, status, resolution_note):
 
 def sign_contract(*, award, actor, contract_reference, start_date, end_date, vendor_signatory_name, signed_date):
     record = award.solicitation.record
+    _require_no_pending_complaint(record)
     if record.status != ProcurementRecord.Status.AWARDED:
         raise ValidationError(f'This record is {record.status} — a contract cannot be signed from this status.')
     if hasattr(award, 'contract'):
@@ -706,6 +723,7 @@ def complete_contract(*, contract, actor, completion_date, inspection_note):
     already be completed before the contract itself can be marked
     complete."""
     record = contract.award.solicitation.record
+    _require_no_pending_complaint(record)
     if record.status != ProcurementRecord.Status.IMPLEMENTATION:
         raise ValidationError(f'This record is {record.status} — completion cannot be recorded from this status.')
     if hasattr(contract, 'completion'):
