@@ -11,8 +11,10 @@ from .models import (
     Contract,
     ContractCompletion,
     FinancialYear,
+    Invoice,
     LawProfile,
     Milestone,
+    Payment,
     PerformanceGuarantee,
     PlanLine,
     PrequalificationApplicant,
@@ -302,6 +304,37 @@ class PerformanceGuaranteeAdmin(admin.ModelAdmin):
 
     list_display = ('contract', 'guarantee_type', 'amount', 'expiry_date', 'verified_by')
     readonly_fields = [f.name for f in PerformanceGuarantee._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(admin.ModelAdmin):
+    """Every field is either service-written-once (submit_invoice) or
+    service-mutated-once (review_invoice) — no legitimate admin edit path."""
+
+    list_display = ('invoice_number', 'contract', 'amount', 'status', 'submitted_by', 'reviewed_by')
+    list_filter = ('status',)
+    readonly_fields = [f.name for f in Invoice._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via services.record_payment()
+    — no legitimate admin edit path."""
+
+    list_display = ('payment_reference', 'invoice', 'amount', 'payment_date', 'paid_by')
+    readonly_fields = [f.name for f in Payment._meta.fields]
 
     def has_add_permission(self, request):
         return False

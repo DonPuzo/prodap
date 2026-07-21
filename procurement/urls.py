@@ -97,4 +97,7 @@ urlpatterns = [
         'staff/contracts/<uuid:pk>/guarantee/add/',
         views.staff_performance_guarantee_add, name='staff_performance_guarantee_add',
     ),
+    path('staff/contracts/<uuid:pk>/invoices/submit/', views.staff_invoice_submit, name='staff_invoice_submit'),
+    path('staff/invoices/<uuid:pk>/review/', views.staff_invoice_review, name='staff_invoice_review'),
+    path('staff/invoices/<uuid:pk>/pay/', views.staff_payment_record, name='staff_payment_record'),
 ]

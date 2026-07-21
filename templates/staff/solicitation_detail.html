@@ -195,6 +195,45 @@
 </div>
 {% endif %}
 
+<h3 style="margin-top: var(--space-4);">Invoices &amp; Payments</h3>
+<p style="color: var(--muted); font-size: .85em;">Total paid: ₦{{ total_paid|floatformat:0 }}</p>
+{% for inv in invoices %}
+<div class="form-card" style="margin-bottom: var(--space-3);">
+  <p><strong>{{ inv.invoice_number }}</strong> — ₦{{ inv.amount|floatformat:0 }}
+    {% if inv.milestone %}(against {{ inv.milestone.description }}){% endif %}
+    <span class="badge badge-{{ inv.status }}">{{ inv.get_status_display }}</span>
+  </p>
+  <p style="color: var(--muted); font-size: .8em;">Submitted {{ inv.submitted_date }} by {{ inv.submitted_by.username }}</p>
+  {% if inv.status == 'pending' %}
+    <form method="post" action="{% url 'staff_invoice_review' inv.id %}">
+      {% csrf_token %}
+      {{ invoice_review_form.as_p }}
+      <button class="btn" type="submit">Submit review</button>
+    </form>
+  {% elif inv.status == 'approved' %}
+    <p style="color: var(--muted); font-size: .8em;">{{ inv.review_note }}</p>
+    {% if inv.payment %}
+      <p><strong>Paid:</strong> ₦{{ inv.payment.amount|floatformat:0 }} on {{ inv.payment.payment_date }} (ref {{ inv.payment.payment_reference }})</p>
+    {% else %}
+      <form method="post" action="{% url 'staff_payment_record' inv.id %}">
+        {% csrf_token %}
+        {{ payment_form.as_p }}
+        <button class="btn" type="submit">Record payment</button>
+      </form>
+    {% endif %}
+  {% else %}
+    <p style="color: var(--muted); font-size: .8em;">Rejected: {{ inv.review_note }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+<div class="form-card">
+  <form method="post" action="{% url 'staff_invoice_submit' contract.id %}">
+    {% csrf_token %}
+    {{ invoice_form.as_p }}
+    <button class="btn" type="submit">Submit invoice</button>
+  </form>
+</div>
+
 <h3 style="margin-top: var(--space-4);">Final Acceptance</h3>
 {% if completion %}
 <div class="detail-grid">

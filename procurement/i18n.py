@@ -120,6 +120,8 @@ STRINGS = {
         'milestone_pending': 'Pending',
         'milestone_completed': 'Completed',
         'guarantee_heading': 'Performance Guarantee',
+        'payments_heading': 'Payments',
+        'total_paid_label': 'Total paid',
         'completion_heading': 'Final Acceptance',
     },
     'pcm': {
@@ -234,6 +236,8 @@ STRINGS = {
         'milestone_pending': 'E Never Ready',
         'milestone_completed': 'E Don Ready',
         'guarantee_heading': 'Performance Guarantee',
+        'payments_heading': 'Payments',
+        'total_paid_label': 'Total wey dem don pay',
         'completion_heading': 'Final Acceptance',
     },
 }

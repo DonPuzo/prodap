@@ -474,6 +474,9 @@ class AuditEvent(models.Model):
         MILESTONE_COMPLETED = 'milestone_completed', 'Milestone Completed'
         CONTRACT_COMPLETED = 'contract_completed', 'Contract Completed'
         PERFORMANCE_GUARANTEE_RECORDED = 'performance_guarantee_recorded', 'Performance Guarantee Recorded'
+        INVOICE_SUBMITTED = 'invoice_submitted', 'Invoice Submitted'
+        INVOICE_REVIEWED = 'invoice_reviewed', 'Invoice Reviewed'
+        PAYMENT_RECORDED = 'payment_recorded', 'Payment Recorded'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -957,3 +960,80 @@ class ContractCompletion(models.Model):
 
     def __str__(self):
         return f'Completion: {self.contract.contract_reference}'
+
+
+class Invoice(models.Model):
+    """A vendor invoice against a signed Contract (blueprint Phase 4 —
+    "invoices, payments"). Submitted by Procurement Unit (day-to-day
+    administration, same tier as milestones/contract signing), reviewed by
+    Finance — Finance's own blueprint role is literally "confirm
+    appropriation, reserve funds, validate invoices and process authorised
+    payment" (Roles and Permissions table), so this maps directly onto an
+    existing role rather than inventing a new one.
+
+    `milestone` is optional, not required: a mobilisation/advance invoice
+    may have no completed milestone behind it yet; a subsequent interim
+    invoice normally does — see clean() for the one thing that IS enforced
+    (a linked milestone must actually belong to this contract and be
+    completed, matching "post-mobilisation payment requires the applicable
+    interim performance certificate")."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(Contract, on_delete=models.PROTECT, related_name='invoices')
+    milestone = models.ForeignKey(
+        Milestone, on_delete=models.PROTECT, null=True, blank=True, related_name='invoices',
+        help_text='Optional — the completed milestone this invoice corresponds to, if any.',
+    )
+    invoice_number = models.CharField(max_length=100)
+    amount = models.DecimalField(max_digits=16, decimal_places=2)
+    submitted_date = models.DateField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='invoices_submitted'
+    )
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name='invoices_reviewed'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['submitted_at']
+
+    def clean(self):
+        if self.milestone_id and self.contract_id and self.milestone.contract_id != self.contract_id:
+            raise ValidationError({'milestone': 'This milestone does not belong to the selected contract.'})
+        if self.milestone_id and self.milestone.status != Milestone.Status.COMPLETED:
+            raise ValidationError({'milestone': 'The linked milestone must be completed first.'})
+
+    def __str__(self):
+        return f'Invoice {self.invoice_number} ({self.get_status_display()})'
+
+
+class Payment(models.Model):
+    """A disbursement against an approved Invoice — one payment per
+    invoice (partial/split payments against a single invoice aren't
+    modeled; a vendor would submit a separate invoice for each tranche).
+    Recorded by Finance, matching Invoice review.
+
+    Public from creation, same as Milestone/Invoice — per the blueprint's
+    own Public Disclosure table, "Implementation" stage publishes
+    "milestones, progress, payments, variations..."; payment data isn't
+    competitively sensitive the way bid/evaluation data is."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    invoice = models.OneToOneField(Invoice, on_delete=models.PROTECT, related_name='payment')
+    amount = models.DecimalField(max_digits=16, decimal_places=2)
+    payment_date = models.DateField()
+    payment_reference = models.CharField(max_length=100)
+    paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='payments_recorded')
+    paid_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Payment {self.payment_reference} for {self.invoice.invoice_number}'

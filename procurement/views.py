@@ -4,7 +4,7 @@ from django.contrib import messages
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -23,11 +23,14 @@ from .forms import (
     ContractForm,
     FundsConfirmationForm,
     FundsDeclineForm,
+    InvoiceForm,
+    InvoiceReviewForm,
     LocalizedAuthenticationForm,
     MethodDeterminationForm,
     MilestoneCompleteForm,
     MilestoneForm,
     PackagingReviewForm,
+    PaymentForm,
     PerformanceGuaranteeForm,
     PlanLineForm,
     PrequalificationApplicantForm,
@@ -42,7 +45,7 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Award, Bid, Clarification, Complaint, Contract, Milestone, PerformanceGuarantee, PlanLine,
+    Award, Bid, Clarification, Complaint, Contract, Invoice, Milestone, Payment, PerformanceGuarantee, PlanLine,
     PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
 )
 from .permissions import role_required
@@ -65,17 +68,20 @@ from .services import (
     prepare_solicitation,
     publish_advertisement,
     record_bid,
+    record_payment,
     record_performance_guarantee,
     record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
     reject_solicitation,
     resolve_complaint,
+    review_invoice,
     review_prequalification_applicant,
     review_requisition_packaging,
     sign_contract,
     submit_clarification_question,
     submit_complaint,
+    submit_invoice,
     submit_plan,
     submit_requisition,
     transition_status,
@@ -228,6 +234,18 @@ def public_record_detail(request, pk):
     # already-public Solicitation.bid_security_* fields) but not the
     # issuing institution or reference number — see the model docstring.
     guarantee = getattr(contract, 'performance_guarantee', None) if contract else None
+    # Payments are public per the blueprint's own disclosure table
+    # ("Implementation: publish milestones, progress, payments, variations
+    # ..."), not competitively sensitive the way bids/evaluation are.
+    # Pending/rejected invoices themselves stay off the public page —
+    # only the resulting payment (amount + date, not the bank reference)
+    # is shown, matching the "raw stays private, resolved goes public"
+    # rule used elsewhere.
+    payments = Payment.objects.filter(invoice__contract=contract).select_related('invoice') if contract else []
+    total_paid = (
+        Payment.objects.filter(invoice__contract=contract).aggregate(total=Sum('amount'))['total'] or 0
+        if contract else 0
+    )
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -246,6 +264,8 @@ def public_record_detail(request, pk):
         'milestones': milestones,
         'guarantee': guarantee,
         'completion': completion,
+        'payments': payments,
+        'total_paid': total_paid,
     })
 
 
@@ -700,6 +720,11 @@ def staff_solicitation_detail(request, pk):
     pending_milestones_count = (
         contract.milestones.exclude(status=Milestone.Status.COMPLETED).count() if contract else 0
     )
+    invoices = contract.invoices.select_related('milestone', 'submitted_by', 'reviewed_by').all() if contract else []
+    total_paid = (
+        Payment.objects.filter(invoice__contract=contract).aggregate(total=Sum('amount'))['total'] or 0
+        if contract else 0
+    )
     return render(request, 'staff/solicitation_detail.html', {
         'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
         'clarifications': clarifications, 'answer_form': ClarificationAnswerForm(),
@@ -712,6 +737,9 @@ def staff_solicitation_detail(request, pk):
         'guarantee': guarantee, 'guarantee_form': PerformanceGuaranteeForm(),
         'completion': completion, 'completion_form': ContractCompletionForm(),
         'pending_milestones_count': pending_milestones_count,
+        'invoices': invoices, 'invoice_form': InvoiceForm(contract=contract) if contract else None,
+        'invoice_review_form': InvoiceReviewForm(), 'payment_form': PaymentForm(),
+        'total_paid': total_paid,
     })
 
 
@@ -970,3 +998,59 @@ def staff_contract_complete(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message)
     return redirect('staff_solicitation_detail', pk=contract.award.solicitation_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_invoice_submit(request, pk):
+    contract = get_object_or_404(Contract, pk=pk)
+    if request.method == 'POST':
+        form = InvoiceForm(request.POST, contract=contract)
+        if form.is_valid():
+            try:
+                submit_invoice(
+                    contract=contract, actor=request.user,
+                    invoice_number=form.cleaned_data['invoice_number'],
+                    amount=form.cleaned_data['amount'],
+                    submitted_date=form.cleaned_data['submitted_date'],
+                    milestone=form.cleaned_data['milestone'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+        else:
+            messages.error(request, 'Invalid invoice submission — check the required fields.')
+    return redirect('staff_solicitation_detail', pk=contract.award.solicitation_id)
+
+
+@role_required(User.Role.FINANCE)
+def staff_invoice_review(request, pk):
+    """Finance's own blueprint role: 'confirm appropriation, reserve
+    funds, validate invoices and process authorised payment.'"""
+    invoice = get_object_or_404(Invoice, pk=pk)
+    if request.method == 'POST':
+        form = InvoiceReviewForm(request.POST)
+        if form.is_valid():
+            try:
+                review_invoice(
+                    invoice=invoice, actor=request.user,
+                    status=form.cleaned_data['status'], review_note=form.cleaned_data['review_note'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+    return redirect('staff_solicitation_detail', pk=invoice.contract.award.solicitation_id)
+
+
+@role_required(User.Role.FINANCE)
+def staff_payment_record(request, pk):
+    invoice = get_object_or_404(Invoice, pk=pk)
+    if request.method == 'POST':
+        form = PaymentForm(request.POST)
+        if form.is_valid():
+            try:
+                record_payment(
+                    invoice=invoice, actor=request.user,
+                    amount=form.cleaned_data['amount'], payment_date=form.cleaned_data['payment_date'],
+                    payment_reference=form.cleaned_data['payment_reference'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+    return redirect('staff_solicitation_detail', pk=invoice.contract.award.solicitation_id)

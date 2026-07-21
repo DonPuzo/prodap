@@ -3,7 +3,8 @@ from django.contrib.auth.forms import AuthenticationForm
 
 from .i18n import DEFAULT_LANG, get_strings
 from .models import (
-    Advertisement, Bid, LawProfile, PlanLine, ProcurementPlan, ProcurementRecord, Requisition, Solicitation,
+    Advertisement, Bid, LawProfile, Milestone, PlanLine, ProcurementPlan, ProcurementRecord, Requisition,
+    Solicitation,
 )
 
 
@@ -371,3 +372,26 @@ class ContractCompletionForm(forms.Form):
         widget=forms.Textarea(attrs={'rows': 3}), required=True,
         help_text='Required — becomes the public acceptance record.',
     )
+
+
+class InvoiceForm(forms.Form):
+    invoice_number = forms.CharField(max_length=100, required=True)
+    amount = forms.DecimalField(max_digits=16, decimal_places=2, required=True, min_value=0.01)
+    submitted_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+    milestone = forms.ModelChoiceField(queryset=Milestone.objects.none(), required=False, empty_label='(none)')
+
+    def __init__(self, *args, contract=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if contract is not None:
+            self.fields['milestone'].queryset = contract.milestones.filter(status=Milestone.Status.COMPLETED)
+
+
+class InvoiceReviewForm(forms.Form):
+    status = forms.ChoiceField(choices=[('approved', 'Approved'), ('rejected', 'Rejected')])
+    review_note = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)
+
+
+class PaymentForm(forms.Form):
+    amount = forms.DecimalField(max_digits=16, decimal_places=2, required=True, min_value=0.01)
+    payment_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+    payment_reference = forms.CharField(max_length=100, required=True)

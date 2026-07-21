@@ -197,6 +197,21 @@
 </div>
 {% endif %}
 
+{% if payments %}
+<div class="flag-box">
+  <h3>{{ ui.payments_heading }}</h3>
+  <p style="color: var(--muted); font-size: .85em;">{{ ui.total_paid_label }}: ₦{{ total_paid|floatformat:0|intcomma }}</p>
+  <ul class="timeline">
+    {% for p in payments %}
+    <li>
+      <div class="transition">₦{{ p.amount|floatformat:0|intcomma }}</div>
+      <div class="when">{{ p.payment_date }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 {% if completion %}
 <div class="flag-box">
   <h3>{{ ui.completion_heading }}</h3>

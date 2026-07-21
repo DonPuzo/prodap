@@ -15,7 +15,9 @@ from .models import (
     Contract,
     ContractCompletion,
     FinancialYear,
+    Invoice,
     Milestone,
+    Payment,
     PerformanceGuarantee,
     PlanLine,
     PrequalificationApplicant,
@@ -48,17 +50,20 @@ from .services import (
     prepare_solicitation,
     publish_advertisement,
     record_bid,
+    record_payment,
     record_performance_guarantee,
     record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
     reject_solicitation,
     resolve_complaint,
+    review_invoice,
     review_prequalification_applicant,
     review_requisition_packaging,
     sign_contract,
     submit_clarification_question,
     submit_complaint,
+    submit_invoice,
     submit_plan,
     submit_requisition,
     transition_status,
@@ -2085,6 +2090,188 @@ class PerformanceGuaranteeTests(TestCase):
         self.assertTrue(PerformanceGuarantee.objects.filter(contract=contract).exists())
 
 
+class InvoicePaymentTests(TestCase):
+    """Invoices & payments (blueprint Phase 4). Finance's own blueprint
+    role ("confirm appropriation, reserve funds, validate invoices and
+    process authorised payment") maps directly onto this — no new role
+    needed. Deliberately independent of the Completion gate — see
+    Invoice's docstring."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_inv', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_inv', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_inv', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_inv', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        award = award_solicitation(
+            solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
+        )
+        self.contract = sign_contract(
+            award=award, actor=self.preparer, contract_reference='CT-INV-1',
+            vendor_signatory_name='Acme Managing Director', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+
+    def submit(self, **overrides):
+        fields = dict(
+            contract=self.contract, actor=self.preparer, invoice_number='INV-001',
+            amount=100_000, submitted_date=datetime.date.today(),
+        )
+        fields.update(overrides)
+        return submit_invoice(**fields)
+
+    def test_submit_requires_invoice_number(self):
+        with self.assertRaises(ValidationError):
+            self.submit(invoice_number='')
+
+    def test_submit_requires_positive_amount(self):
+        with self.assertRaises(ValidationError):
+            self.submit(amount=0)
+
+    def test_submit_with_milestone_requires_it_belongs_and_is_completed(self):
+        milestone = add_milestone(
+            contract=self.contract, actor=self.preparer, description='Delivery',
+            due_date=datetime.date.today() + datetime.timedelta(days=10),
+        )
+        with self.assertRaises(ValidationError):
+            self.submit(milestone=milestone)  # not completed yet
+        complete_milestone(milestone=milestone, actor=self.preparer, completion_note='Inspected, verified.')
+        invoice = self.submit(milestone=milestone)
+        self.assertEqual(invoice.milestone, milestone)
+
+    def test_review_requires_valid_outcome_and_note(self):
+        invoice = self.submit()
+        with self.assertRaises(ValidationError):
+            review_invoice(invoice=invoice, actor=self.finance, status='pending', review_note='x')
+        with self.assertRaises(ValidationError):
+            review_invoice(invoice=invoice, actor=self.finance, status=Invoice.Status.APPROVED, review_note='')
+
+    def test_review_separation_of_duties(self):
+        invoice = self.submit()
+        with self.assertRaises(SeparationOfDutiesError):
+            review_invoice(
+                invoice=invoice, actor=self.preparer, status=Invoice.Status.APPROVED, review_note='Approving my own.'
+            )
+
+    def test_review_twice_raises(self):
+        invoice = self.submit()
+        review_invoice(invoice=invoice, actor=self.finance, status=Invoice.Status.APPROVED, review_note='Checked.')
+        with self.assertRaises(ValidationError):
+            review_invoice(invoice=invoice, actor=self.finance, status=Invoice.Status.REJECTED, review_note='Again.')
+
+    def test_payment_requires_approved_invoice(self):
+        invoice = self.submit()
+        with self.assertRaises(ValidationError):
+            record_payment(
+                invoice=invoice, actor=self.finance, amount=100_000,
+                payment_date=datetime.date.today(), payment_reference='PMT-1',
+            )
+
+    def test_payment_twice_raises(self):
+        invoice = self.submit()
+        review_invoice(invoice=invoice, actor=self.finance, status=Invoice.Status.APPROVED, review_note='Checked.')
+        record_payment(
+            invoice=invoice, actor=self.finance, amount=100_000,
+            payment_date=datetime.date.today(), payment_reference='PMT-1',
+        )
+        with self.assertRaises(ValidationError):
+            record_payment(
+                invoice=invoice, actor=self.finance, amount=100_000,
+                payment_date=datetime.date.today(), payment_reference='PMT-2',
+            )
+
+    def test_full_happy_path_payment_visible_publicly(self):
+        invoice = self.submit()
+        review_invoice(invoice=invoice, actor=self.finance, status=Invoice.Status.APPROVED, review_note='Checked, matches contract.')
+        record_payment(
+            invoice=invoice, actor=self.finance, amount=100_000,
+            payment_date=datetime.date.today(), payment_reference='PMT-VERIFY-1',
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(content_type__model='invoice', action=AuditEvent.Action.INVOICE_REVIEWED).exists()
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(content_type__model='payment', action=AuditEvent.Action.PAYMENT_RECORDED).exists()
+        )
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, '100,000')
+        # The bank payment reference stays staff-only.
+        self.assertNotContains(response, 'PMT-VERIFY-1')
+
+    def test_invoice_review_view_rejects_wrong_role(self):
+        invoice = self.submit()
+        self.client.force_login(self.preparer)  # procurement_unit, not finance
+        response = self.client.post(reverse('staff_invoice_review', args=[invoice.id]), {
+            'status': 'approved', 'review_note': 'Checked.',
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_invoice_review_view_allows_finance(self):
+        invoice = self.submit()
+        self.client.force_login(self.finance)
+        response = self.client.post(reverse('staff_invoice_review', args=[invoice.id]), {
+            'status': 'approved', 'review_note': 'Checked.',
+        })
+        self.assertEqual(response.status_code, 302)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, Invoice.Status.APPROVED)
+
+    def test_payment_record_view_allows_finance(self):
+        invoice = self.submit()
+        review_invoice(invoice=invoice, actor=self.finance, status=Invoice.Status.APPROVED, review_note='Checked.')
+        self.client.force_login(self.finance)
+        response = self.client.post(reverse('staff_payment_record', args=[invoice.id]), {
+            'amount': '100000', 'payment_date': datetime.date.today(), 'payment_reference': 'PMT-VIEW-1',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Payment.objects.filter(invoice=invoice).exists())
+
+    def test_invoice_submit_view_allows_procurement_unit(self):
+        self.client.force_login(self.preparer)
+        response = self.client.post(reverse('staff_invoice_submit', args=[self.contract.id]), {
+            'invoice_number': 'INV-VIEW-1', 'amount': '100000', 'submitted_date': datetime.date.today(),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Invoice.objects.filter(contract=self.contract, invoice_number='INV-VIEW-1').exists())
+
+
 class SolicitationViewRoleGateTests(TestCase):
     def setUp(self):
         self.law_profile = make_law_profile()
@@ -2209,4 +2396,31 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_add_permission(request=None))
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in ContractCompletion._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_performance_guarantee_admin_has_no_add_permission(self):
+        from .admin import PerformanceGuaranteeAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = PerformanceGuaranteeAdmin(PerformanceGuarantee, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in PerformanceGuarantee._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_invoice_admin_has_no_add_permission(self):
+        from .admin import InvoiceAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = InvoiceAdmin(Invoice, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Invoice._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_payment_admin_has_no_add_permission(self):
+        from .admin import PaymentAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = PaymentAdmin(Payment, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Payment._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)

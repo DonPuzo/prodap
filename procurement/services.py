@@ -15,7 +15,9 @@ from .models import (
     Complaint,
     Contract,
     ContractCompletion,
+    Invoice,
     Milestone,
+    Payment,
     PerformanceGuarantee,
     PlanLine,
     PrequalificationApplicant,
@@ -769,3 +771,69 @@ def complete_contract(*, contract, actor, completion_date, inspection_note):
             note=f'Contract {contract.contract_reference} completed and accepted.',
         )
     return completion
+
+
+# --- Invoices & payments (blueprint Phase 4 — "invoices, payments").
+# Deliberately independent of the Completion gate above: final payments
+# often trail acceptance in practice (retention, etc.), so this pass does
+# not tie complete_contract() to invoice/payment state — see Invoice's
+# docstring. ---
+
+
+def submit_invoice(*, contract, actor, invoice_number, amount, submitted_date, milestone=None):
+    if not invoice_number.strip():
+        raise ValidationError('An invoice number is required.')
+    if not amount or amount <= 0:
+        raise ValidationError('A positive invoice amount is required.')
+    if milestone is not None:
+        if milestone.contract_id != contract.id:
+            raise ValidationError('The selected milestone does not belong to this contract.')
+        if milestone.status != Milestone.Status.COMPLETED:
+            raise ValidationError('The linked milestone must be completed before invoicing against it.')
+    with transaction.atomic():
+        invoice = Invoice.objects.create(
+            contract=contract, milestone=milestone, invoice_number=invoice_number.strip(),
+            amount=amount, submitted_date=submitted_date, submitted_by=actor,
+        )
+        log_audit_event(target=invoice, action=AuditEvent.Action.INVOICE_SUBMITTED, actor=actor)
+    return invoice
+
+
+def review_invoice(*, invoice, actor, status, review_note):
+    if status not in (Invoice.Status.APPROVED, Invoice.Status.REJECTED):
+        raise ValidationError('Outcome must be Approved or Rejected.')
+    if not review_note.strip():
+        raise ValidationError('A written review note is required.')
+    if invoice.status != Invoice.Status.PENDING:
+        raise ValidationError(f'This invoice is already {invoice.get_status_display().lower()}.')
+    if actor.pk == invoice.submitted_by_id:
+        raise SeparationOfDutiesError('You cannot review an invoice you submitted yourself.')
+    with transaction.atomic():
+        invoice.status = status
+        invoice.review_note = review_note.strip()
+        invoice.reviewed_by = actor
+        invoice.reviewed_at = timezone.now()
+        invoice.save(update_fields=['status', 'review_note', 'reviewed_by', 'reviewed_at'])
+        log_audit_event(
+            target=invoice, action=AuditEvent.Action.INVOICE_REVIEWED, actor=actor, reason=review_note,
+            new_value={'status': status},
+        )
+    return invoice
+
+
+def record_payment(*, invoice, actor, amount, payment_date, payment_reference):
+    if invoice.status != Invoice.Status.APPROVED:
+        raise ValidationError('Only an approved invoice can be paid.')
+    if hasattr(invoice, 'payment'):
+        raise ValidationError('This invoice has already been paid.')
+    if not amount or amount <= 0:
+        raise ValidationError('A positive payment amount is required.')
+    if not payment_reference.strip():
+        raise ValidationError('A payment reference is required.')
+    with transaction.atomic():
+        payment = Payment.objects.create(
+            invoice=invoice, amount=amount, payment_date=payment_date,
+            payment_reference=payment_reference.strip(), paid_by=actor,
+        )
+        log_audit_event(target=payment, action=AuditEvent.Action.PAYMENT_RECORDED, actor=actor)
+    return payment
