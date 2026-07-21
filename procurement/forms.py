@@ -102,6 +102,11 @@ class StatusTransitionForm(forms.Form):
             # Awarded -> Implementation is now evidence-derived (see
             # services.sign_contract) — Phase 4 slice, same mechanism.
             excluded.add(ProcurementRecord.Status.IMPLEMENTATION)
+        if current_status == ProcurementRecord.Status.IMPLEMENTATION:
+            # Implementation -> Completed is now evidence-derived (see
+            # services.complete_contract) — closes the last manual gap in
+            # the record status lifecycle.
+            excluded.add(ProcurementRecord.Status.COMPLETED)
         choices = [c for c in ProcurementRecord.Status.choices if c[0] not in excluded]
         self.fields['new_status'].choices = choices
 
@@ -349,4 +354,12 @@ class MilestoneCompleteForm(forms.Form):
     completion_note = forms.CharField(
         widget=forms.Textarea(attrs={'rows': 3}), required=True,
         help_text='Required — evidence of inspection/verification.',
+    )
+
+
+class ContractCompletionForm(forms.Form):
+    completion_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+    inspection_note = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3}), required=True,
+        help_text='Required — becomes the public acceptance record.',
     )

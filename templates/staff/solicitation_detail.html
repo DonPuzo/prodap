@@ -172,6 +172,26 @@
     <button class="btn" type="submit">Add milestone</button>
   </form>
 </div>
+
+<h3 style="margin-top: var(--space-4);">Final Acceptance</h3>
+{% if completion %}
+<div class="detail-grid">
+  <div class="field"><div class="label">Completion date</div><div class="val">{{ completion.completion_date }}</div></div>
+  <div class="field"><div class="label">Recorded by</div><div class="val">{{ completion.completed_by.username }}</div></div>
+</div>
+<p>{{ completion.inspection_note }}</p>
+{% else %}
+<div class="form-card">
+  {% if pending_milestones_count %}
+  <p class="message">{{ pending_milestones_count }} milestone(s) still pending — all must be completed before final acceptance can be recorded.</p>
+  {% endif %}
+  <form method="post" action="{% url 'staff_contract_complete' contract.id %}">
+    {% csrf_token %}
+    {{ completion_form.as_p }}
+    <button class="btn" type="submit">Record final acceptance</button>
+  </form>
+</div>
+{% endif %}
 {% else %}
 <div class="form-card">
   <form method="post" action="{% url 'staff_contract_sign' award.id %}">

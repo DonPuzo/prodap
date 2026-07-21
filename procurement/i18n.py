@@ -119,6 +119,7 @@ STRINGS = {
         'milestones_heading': 'Delivery Milestones',
         'milestone_pending': 'Pending',
         'milestone_completed': 'Completed',
+        'completion_heading': 'Final Acceptance',
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -231,6 +232,7 @@ STRINGS = {
         'milestones_heading': 'Delivery Milestones',
         'milestone_pending': 'E Never Ready',
         'milestone_completed': 'E Don Ready',
+        'completion_heading': 'Final Acceptance',
     },
 }
 

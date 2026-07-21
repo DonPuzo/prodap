@@ -89,4 +89,8 @@ urlpatterns = [
         'staff/milestones/<uuid:pk>/complete/',
         views.staff_milestone_complete, name='staff_milestone_complete',
     ),
+    path(
+        'staff/contracts/<uuid:pk>/complete/',
+        views.staff_contract_complete, name='staff_contract_complete',
+    ),
 ]

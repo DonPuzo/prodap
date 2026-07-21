@@ -472,6 +472,7 @@ class AuditEvent(models.Model):
         CONTRACT_SIGNED = 'contract_signed', 'Contract Signed'
         MILESTONE_ADDED = 'milestone_added', 'Milestone Added'
         MILESTONE_COMPLETED = 'milestone_completed', 'Milestone Completed'
+        CONTRACT_COMPLETED = 'contract_completed', 'Contract Completed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -900,3 +901,29 @@ class Milestone(models.Model):
 
     def __str__(self):
         return f'{self.description} ({self.get_status_display()})'
+
+
+class ContractCompletion(models.Model):
+    """Final acceptance sign-off on a Contract — the only sanctioned way a
+    ProcurementRecord reaches Completed status (see services.
+    complete_contract). OneToOne on Contract: one completion record per
+    contract, DB-enforced. Decided by the Accounting Officer (final
+    institutional sign-off, same authority level as Award and Complaint
+    resolution) — Procurement Unit continues to own day-to-day execution
+    (bids, contract signing, milestones).
+
+    inspection_note is intentionally PUBLIC, same principle as Award's
+    decision_note — it's the institution's own accountable acceptance
+    record, not a third party's raw submission."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.OneToOneField(Contract, on_delete=models.PROTECT, related_name='completion')
+    completion_date = models.DateField()
+    inspection_note = models.TextField(help_text='Final acceptance summary — public once recorded.')
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='contract_completions_decided'
+    )
+    completed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Completion: {self.contract.contract_reference}'

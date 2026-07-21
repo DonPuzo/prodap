@@ -9,6 +9,7 @@ from .models import (
     Clarification,
     Complaint,
     Contract,
+    ContractCompletion,
     FinancialYear,
     LawProfile,
     Milestone,
@@ -285,6 +286,21 @@ class MilestoneAdmin(admin.ModelAdmin):
     list_display = ('description', 'contract', 'due_date', 'status', 'completed_by')
     list_filter = ('status',)
     readonly_fields = [f.name for f in Milestone._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ContractCompletion)
+class ContractCompletionAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via services.complete_contract()
+    — no legitimate admin edit path."""
+
+    list_display = ('contract', 'completion_date', 'completed_by', 'completed_at')
+    readonly_fields = [f.name for f in ContractCompletion._meta.fields]
 
     def has_add_permission(self, request):
         return False

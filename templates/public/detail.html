@@ -185,6 +185,14 @@
     {% endfor %}
   </ul>
 </div>
+
+{% if completion %}
+<div class="flag-box">
+  <h3>{{ ui.completion_heading }}</h3>
+  <p>{{ completion.inspection_note }}</p>
+  <p style="color: var(--muted); font-size: .85em;">{{ completion.completion_date }}</p>
+</div>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endif %}

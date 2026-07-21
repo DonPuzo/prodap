@@ -14,6 +14,7 @@ from .models import (
     Clarification,
     Complaint,
     Contract,
+    ContractCompletion,
     Milestone,
     PlanLine,
     PrequalificationApplicant,
@@ -696,3 +697,31 @@ def complete_milestone(*, milestone, actor, completion_note):
         milestone.save(update_fields=['status', 'completion_note', 'completed_by', 'completed_at'])
         log_audit_event(target=milestone, action=AuditEvent.Action.MILESTONE_COMPLETED, actor=actor, reason=completion_note)
     return milestone
+
+
+def complete_contract(*, contract, actor, completion_date, inspection_note):
+    """Final acceptance sign-off — the only sanctioned way a
+    ProcurementRecord reaches Completed status. Closes the loop opened by
+    sign_contract()/add_milestone(): every milestone (if any exist) must
+    already be completed before the contract itself can be marked
+    complete."""
+    record = contract.award.solicitation.record
+    if record.status != ProcurementRecord.Status.IMPLEMENTATION:
+        raise ValidationError(f'This record is {record.status} — completion cannot be recorded from this status.')
+    if hasattr(contract, 'completion'):
+        raise ValidationError('This contract has already been marked complete.')
+    if contract.milestones.exclude(status=Milestone.Status.COMPLETED).exists():
+        raise ValidationError('All milestones must be completed before the contract can be marked complete.')
+    if not inspection_note.strip():
+        raise ValidationError('A final inspection/acceptance note is required.')
+    with transaction.atomic():
+        completion = ContractCompletion.objects.create(
+            contract=contract, completion_date=completion_date, inspection_note=inspection_note.strip(),
+            completed_by=actor,
+        )
+        log_audit_event(target=completion, action=AuditEvent.Action.CONTRACT_COMPLETED, actor=actor, reason=inspection_note)
+        transition_status(
+            record=record, new_status=ProcurementRecord.Status.COMPLETED, updated_by=actor,
+            note=f'Contract {contract.contract_reference} completed and accepted.',
+        )
+    return completion

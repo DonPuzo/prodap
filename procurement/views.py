@@ -19,6 +19,7 @@ from .forms import (
     ClarificationQuestionForm,
     ComplaintForm,
     ComplaintResolveForm,
+    ContractCompletionForm,
     ContractForm,
     FundsConfirmationForm,
     FundsDeclineForm,
@@ -51,6 +52,7 @@ from .services import (
     approve_plan_line,
     approve_solicitation,
     award_solicitation,
+    complete_contract,
     complete_milestone,
     confirm_requisition_funds,
     create_record_from_requisition,
@@ -219,6 +221,7 @@ def public_record_detail(request, pk):
     # sensitive the way bids/evaluation are.
     contract = getattr(award, 'contract', None) if award else None
     milestones = contract.milestones.all() if contract else []
+    completion = getattr(contract, 'completion', None) if contract else None
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -235,6 +238,7 @@ def public_record_detail(request, pk):
         'complaints_pending_count': complaints_pending_count,
         'contract': contract,
         'milestones': milestones,
+        'completion': completion,
     })
 
 
@@ -678,6 +682,12 @@ def staff_solicitation_detail(request, pk):
     award = getattr(solicitation, 'award', None)
     contract = getattr(award, 'contract', None) if award else None
     milestones = contract.milestones.select_related('completed_by').all() if contract else []
+    completion = getattr(contract, 'completion', None) if contract else None
+    # Informational only — the service is the real gate. A contract with
+    # zero milestones is not blocked from completion.
+    pending_milestones_count = (
+        contract.milestones.exclude(status=Milestone.Status.COMPLETED).count() if contract else 0
+    )
     return render(request, 'staff/solicitation_detail.html', {
         'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
         'clarifications': clarifications, 'answer_form': ClarificationAnswerForm(),
@@ -687,6 +697,8 @@ def staff_solicitation_detail(request, pk):
         'award_form': AwardForm(solicitation=solicitation) if not award else None,
         'contract': contract, 'contract_form': ContractForm(),
         'milestones': milestones, 'milestone_form': MilestoneForm(), 'milestone_complete_form': MilestoneCompleteForm(),
+        'completion': completion, 'completion_form': ContractCompletionForm(),
+        'pending_milestones_count': pending_milestones_count,
     })
 
 
@@ -903,3 +915,23 @@ def staff_milestone_complete(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message)
     return redirect('staff_solicitation_detail', pk=milestone.contract.award.solicitation_id)
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_contract_complete(request, pk):
+    """Final acceptance sign-off — independent authority level from
+    Procurement Unit's day-to-day execution, same reasoning as Award and
+    Complaint resolution."""
+    contract = get_object_or_404(Contract, pk=pk)
+    if request.method == 'POST':
+        form = ContractCompletionForm(request.POST)
+        if form.is_valid():
+            try:
+                complete_contract(
+                    contract=contract, actor=request.user,
+                    completion_date=form.cleaned_data['completion_date'],
+                    inspection_note=form.cleaned_data['inspection_note'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=contract.award.solicitation_id)

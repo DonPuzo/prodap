@@ -13,6 +13,7 @@ from .models import (
     Clarification,
     Complaint,
     Contract,
+    ContractCompletion,
     FinancialYear,
     Milestone,
     PlanLine,
@@ -35,6 +36,7 @@ from .services import (
     approve_plan_line,
     approve_solicitation,
     award_solicitation,
+    complete_contract,
     complete_milestone,
     confirm_requisition_funds,
     create_record_from_requisition,
@@ -1638,6 +1640,159 @@ class ContractMilestoneTests(TestCase):
         self.assertEqual(milestone.status, Milestone.Status.COMPLETED)
 
 
+class ContractCompletionTests(TestCase):
+    """Final acceptance sign-off — the last remaining manual gap in the
+    record status lifecycle. Setup walks all the way to a signed Contract,
+    same chain as ContractMilestoneTests."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_complete', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_complete', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_complete', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_complete', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        award = award_solicitation(
+            solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
+        )
+        self.contract = sign_contract(
+            award=award, actor=self.preparer, contract_reference='CT-2026-100',
+            vendor_signatory_name='Acme Managing Director', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+
+    def test_complete_requires_implementation_status(self):
+        transition_status(record=self.record, new_status='Abandoned', updated_by=self.preparer)
+        with self.assertRaises(ValidationError):
+            complete_contract(
+                contract=self.contract, actor=self.approver,
+                completion_date=datetime.date.today(), inspection_note='Done.',
+            )
+
+    def test_complete_requires_all_milestones_completed(self):
+        add_milestone(
+            contract=self.contract, actor=self.preparer, description='Delivery',
+            due_date=datetime.date.today() + datetime.timedelta(days=10),
+        )
+        with self.assertRaises(ValidationError):
+            complete_contract(
+                contract=self.contract, actor=self.approver,
+                completion_date=datetime.date.today(), inspection_note='Done.',
+            )
+
+    def test_complete_with_zero_milestones_is_allowed(self):
+        completion = complete_contract(
+            contract=self.contract, actor=self.approver,
+            completion_date=datetime.date.today(), inspection_note='No milestones tracked; delivery confirmed.',
+        )
+        self.assertIsNotNone(completion.pk)
+
+    def test_complete_requires_note(self):
+        with self.assertRaises(ValidationError):
+            complete_contract(
+                contract=self.contract, actor=self.approver,
+                completion_date=datetime.date.today(), inspection_note='',
+            )
+
+    def test_complete_twice_raises(self):
+        complete_contract(
+            contract=self.contract, actor=self.approver,
+            completion_date=datetime.date.today(), inspection_note='Confirmed complete.',
+        )
+        with self.assertRaises(ValidationError):
+            complete_contract(
+                contract=self.contract, actor=self.approver,
+                completion_date=datetime.date.today(), inspection_note='Again.',
+            )
+
+    def test_full_happy_path_completion_visible_publicly(self):
+        milestone = add_milestone(
+            contract=self.contract, actor=self.preparer, description='Delivery and installation',
+            due_date=datetime.date.today() + datetime.timedelta(days=10),
+        )
+        complete_milestone(milestone=milestone, actor=self.preparer, completion_note='Inspected, verified complete.')
+        complete_contract(
+            contract=self.contract, actor=self.approver,
+            completion_date=datetime.date.today(), inspection_note='Final walkthrough confirms full delivery.',
+        )
+
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, ProcurementRecord.Status.COMPLETED)
+
+        status_updates = StatusUpdate.objects.filter(record=self.record)
+        self.assertEqual(status_updates.last().old_status, 'Implementation')
+        self.assertEqual(status_updates.last().new_status, 'Completed')
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='contractcompletion', action=AuditEvent.Action.CONTRACT_COMPLETED
+            ).exists()
+        )
+
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, 'Final walkthrough confirms full delivery.')
+
+    def test_completed_no_longer_manually_selectable_from_implementation(self):
+        self.client.force_login(self.preparer)
+        response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
+            'new_status': 'Completed', 'note': 'Attempted manual bypass',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'Implementation')
+
+    def test_contract_complete_view_rejects_wrong_role(self):
+        self.client.force_login(self.preparer)  # procurement_unit, not accounting_officer
+        response = self.client.post(reverse('staff_contract_complete', args=[self.contract.id]), {
+            'completion_date': datetime.date.today(), 'inspection_note': 'Done.',
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_contract_complete_view_allows_accounting_officer(self):
+        self.client.force_login(self.approver)
+        response = self.client.post(reverse('staff_contract_complete', args=[self.contract.id]), {
+            'completion_date': datetime.date.today(), 'inspection_note': 'Confirmed complete.',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ContractCompletion.objects.filter(contract=self.contract).exists())
+
+
 class SolicitationViewRoleGateTests(TestCase):
     def setUp(self):
         self.law_profile = make_law_profile()
@@ -1753,4 +1908,13 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_add_permission(request=None))
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in Milestone._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_contract_completion_admin_has_no_add_permission(self):
+        from .admin import ContractCompletionAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = ContractCompletionAdmin(ContractCompletion, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in ContractCompletion._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)
