@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block content %}
+<h2>Reports &amp; Risk Analytics</h2>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="value">{{ completed_count }}</div>
+    <div class="label">Completed Contracts</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">{% if avg_cycle_days is not None %}{{ avg_cycle_days }}{% else %}—{% endif %}</div>
+    <div class="label">Avg. Days: Plan to Completion</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">₦{{ total_paid|floatformat:0|intcomma }}</div>
+    <div class="label">Total Paid</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">{{ outlier_count }}</div>
+    <div class="label">Cost Outliers</div>
+  </div>
+</div>
+
+<h3>Records by Status</h3>
+<table class="record-list">
+  <thead><tr><th>Status</th><th>Count</th></tr></thead>
+  <tbody>
+    {% for row in status_counts %}
+    <tr>
+      <td data-label="Status"><span class="badge badge-{{ row.status|lower }}">{{ row.status }}</span></td>
+      <td data-label="Count">{{ row.count }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="margin-top: var(--space-5);">Spend by Department</h3>
+<table class="record-list">
+  <thead><tr><th>Department</th><th>Records</th><th>Estimated Total</th></tr></thead>
+  <tbody>
+    {% for row in department_totals %}
+    <tr>
+      <td data-label="Department">{{ row.department }}</td>
+      <td data-label="Records">{{ row.count }}</td>
+      <td data-label="Estimated Total">₦{{ row.total|floatformat:0|intcomma }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="margin-top: var(--space-5);">Spend by Procurement Method</h3>
+<table class="record-list">
+  <thead><tr><th>Method</th><th>Records</th><th>Estimated Total</th></tr></thead>
+  <tbody>
+    {% for row in method_totals %}
+    <tr>
+      <td data-label="Method">{{ row.procurement_method }}</td>
+      <td data-label="Records">{{ row.count }}</td>
+      <td data-label="Estimated Total">₦{{ row.total|floatformat:0|intcomma }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="margin-top: var(--space-5);">Complaints</h3>
+<div class="detail-grid">
+  <div class="field"><div class="label">Total Filed</div><div class="val">{{ complaint_total }}</div></div>
+  <div class="field"><div class="label">Pending</div><div class="val">{{ complaint_counts.pending|default:0 }}</div></div>
+  <div class="field"><div class="label">Upheld</div><div class="val">{{ complaint_counts.upheld|default:0 }}</div></div>
+  <div class="field"><div class="label">Dismissed</div><div class="val">{{ complaint_counts.dismissed|default:0 }}</div></div>
+</div>
+
+<h3 style="margin-top: var(--space-5);">Invoices &amp; Payments</h3>
+<div class="detail-grid">
+  <div class="field"><div class="label">Total Invoiced</div><div class="val">₦{{ total_invoiced|floatformat:0|intcomma }}</div></div>
+  <div class="field"><div class="label">Total Paid</div><div class="val">₦{{ total_paid|floatformat:0|intcomma }}</div></div>
+</div>
+{% endblock %}

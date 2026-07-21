@@ -45,8 +45,9 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Award, Bid, Clarification, Complaint, Contract, Invoice, Milestone, Payment, PerformanceGuarantee, PlanLine,
-    PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
+    Award, Bid, Clarification, Complaint, Contract, ContractCompletion, Invoice, Milestone, Payment,
+    PerformanceGuarantee, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
+    Requisition, Solicitation, User,
 )
 from .permissions import role_required
 from .services import (
@@ -1054,3 +1055,53 @@ def staff_payment_record(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
     return redirect('staff_solicitation_detail', pk=invoice.contract.award.solicitation_id)
+
+
+# --- Reports & Risk Analytics (blueprint Phase 5). Pure read/aggregation
+# over data every other view already writes — no new models, no new gates.
+# @login_required only, same visibility as staff_record_list/
+# staff_requisition_list: this doesn't expose anything an individual staff
+# member couldn't already see by opening each record's detail page. ---
+
+@login_required
+def staff_analytics(request):
+    records = ProcurementRecord.objects.all()
+
+    status_counts = list(records.values('status').annotate(count=Count('id')).order_by('status'))
+    department_totals = list(
+        records.values('department').annotate(total=Sum('estimated_cost'), count=Count('id')).order_by('-total')
+    )
+    method_totals = list(
+        records.values('procurement_method').annotate(total=Sum('estimated_cost'), count=Count('id')).order_by('-total')
+    )
+
+    # is_cost_outlier() runs its own comparison query per record — fine at
+    # this scale (a single institution's annual procurement volume), not
+    # optimized for a much larger dataset.
+    outlier_count = sum(1 for r in records.filter(awarded_cost__isnull=False) if r.is_cost_outlier())
+
+    complaint_counts = {
+        row['status']: row['count'] for row in Complaint.objects.values('status').annotate(count=Count('id'))
+    }
+
+    total_paid = Payment.objects.aggregate(total=Sum('amount'))['total'] or 0
+    total_invoiced = Invoice.objects.aggregate(total=Sum('amount'))['total'] or 0
+
+    cycle_days = []
+    for completion in ContractCompletion.objects.select_related('contract__award__solicitation__record'):
+        record = completion.contract.award.solicitation.record
+        cycle_days.append((completion.completed_at.date() - record.created_at.date()).days)
+    avg_cycle_days = round(sum(cycle_days) / len(cycle_days)) if cycle_days else None
+
+    return render(request, 'staff/analytics.html', {
+        'status_counts': status_counts,
+        'department_totals': department_totals,
+        'method_totals': method_totals,
+        'outlier_count': outlier_count,
+        'complaint_counts': complaint_counts,
+        'complaint_total': sum(complaint_counts.values()),
+        'total_paid': total_paid,
+        'total_invoiced': total_invoiced,
+        'avg_cycle_days': avg_cycle_days,
+        'completed_count': len(cycle_days),
+    })

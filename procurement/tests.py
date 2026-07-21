@@ -2424,3 +2424,113 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in Payment._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+
+class AnalyticsTests(TestCase):
+    """Reports & Risk Analytics (blueprint Phase 5) — pure read/aggregation,
+    visible to any authenticated staff member, same as staff_record_list/
+    staff_requisition_list."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.staff = User.objects.create_user(username='any_staff', password='x', role=User.Role.PROCUREMENT_UNIT)
+
+    def test_requires_login(self):
+        response = self.client.get(reverse('staff_analytics'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/staff/login/', response.url)
+
+    def test_accessible_to_any_authenticated_staff(self):
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_analytics'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_status_and_department_aggregation(self):
+        make_record(self.law_profile, self.staff, department='Bursary', estimated_cost=100_000)
+        make_record(self.law_profile, self.staff, department='Bursary', estimated_cost=200_000)
+        make_record(self.law_profile, self.staff, department='Faculty of Science', estimated_cost=50_000)
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_analytics'))
+        self.assertContains(response, 'Bursary')
+        self.assertContains(response, 'Faculty of Science')
+        self.assertContains(response, '300,000')  # Bursary total (100,000 + 200,000)
+
+    def test_complaint_counts_reflected(self):
+        record = make_record(self.law_profile, self.staff)
+        submit_complaint(
+            record=record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concerned about the process.',
+        )
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_analytics'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<div class="val">1</div>')  # one pending complaint
+
+    def test_full_chain_reflects_payment_and_cycle_time(self):
+        fy = make_financial_year(self.law_profile)
+        approver = User.objects.create_user(username='ao_analytics', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        requester = User.objects.create_user(username='ru_analytics', password='x', role=User.Role.REQUESTING_UNIT)
+        finance = User.objects.create_user(username='fin_analytics', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.staff, max_value=5_000_000, authority='Accounting Officer')
+
+        plan = ProcurementPlan.objects.create(law_profile=self.law_profile, financial_year=fy, prepared_by=self.staff)
+        line = PlanLine.objects.create(
+            plan=plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=requester,
+        )
+        approve_plan(plan=plan, actor=approver)
+        line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR, requested_by=requester,
+        )
+        submit_requisition(requisition=req, actor=requester)
+        confirm_requisition_funds(requisition=req, actor=finance)
+        review_requisition_packaging(requisition=req, actor=self.staff, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.staff)
+        record = create_record_from_requisition(requisition=req, actor=self.staff, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+        solicitation = prepare_solicitation(record=record, actor=self.staff, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.staff, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        bid = record_bid(solicitation=solicitation, actor=self.staff, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        award = award_solicitation(
+            solicitation=solicitation, actor=approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
+        )
+        contract = sign_contract(
+            award=award, actor=self.staff, contract_reference='CT-ANALYTICS-1',
+            vendor_signatory_name='Acme MD', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+        complete_contract(
+            contract=contract, actor=approver, completion_date=datetime.date.today(),
+            inspection_note='Delivery confirmed.',
+        )
+        invoice = submit_invoice(
+            contract=contract, actor=self.staff, invoice_number='INV-ANALYTICS-1',
+            amount=480_000, submitted_date=datetime.date.today(),
+        )
+        review_invoice(invoice=invoice, actor=finance, status=Invoice.Status.APPROVED, review_note='Checked.')
+        record_payment(
+            invoice=invoice, actor=finance, amount=480_000,
+            payment_date=datetime.date.today(), payment_reference='PMT-ANALYTICS-1',
+        )
+
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_analytics'))
+        self.assertContains(response, '480,000')  # total paid
+        # Regression guard: created_at and completed_at both land "today"
+        # in this test, so avg_cycle_days == 0 — a naive `{% if
+        # avg_cycle_days %}` template check would treat 0 as falsy and
+        # wrongly render the "no data" dash instead of "0".
+        self.assertContains(response, '<div class="value">0</div>')
+        self.assertNotContains(response, '<div class="value">—</div>')

@@ -100,4 +100,7 @@ urlpatterns = [
     path('staff/contracts/<uuid:pk>/invoices/submit/', views.staff_invoice_submit, name='staff_invoice_submit'),
     path('staff/invoices/<uuid:pk>/review/', views.staff_invoice_review, name='staff_invoice_review'),
     path('staff/invoices/<uuid:pk>/pay/', views.staff_payment_record, name='staff_payment_record'),
+
+    # Phase 5: Reports & Risk Analytics.
+    path('staff/analytics/', views.staff_analytics, name='staff_analytics'),
 ]
