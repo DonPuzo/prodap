@@ -12,6 +12,7 @@ from .models import (
     Award,
     Bid,
     Clarification,
+    Complaint,
     PlanLine,
     PrequalificationApplicant,
     ProcessIdentifierSequence,
@@ -592,3 +593,45 @@ def award_solicitation(
             note=f'Awarded to {winning_bid.vendor_name} — ₦{winning_bid.bid_amount}.',
         )
     return award
+
+
+# --- Complaints handling (blueprint Phase 3 — Approvals): public, no-login
+# intake at any project stage, resolved by the Accounting Officer
+# (independent of the Procurement Unit whose conduct may be the subject of
+# the complaint). submit_complaint() is anonymous with respect to audit
+# events — no actor, matching flag_record's/submit_clarification_question's
+# precedent for public-submitted content — but DOES require contact info
+# (unlike Clarification) since a complaint needs real follow-up. ---
+
+
+def submit_complaint(*, record, complainant_name, complainant_contact, description):
+    if not complainant_name.strip():
+        raise ValidationError('Your name is required.')
+    if not complainant_contact.strip():
+        raise ValidationError('Contact information (email or phone) is required so we can follow up.')
+    if not description.strip():
+        raise ValidationError('A description of the complaint is required.')
+    return Complaint.objects.create(
+        record=record, complainant_name=complainant_name.strip(),
+        complainant_contact=complainant_contact.strip(), description=description.strip(),
+    )
+
+
+def resolve_complaint(*, complaint, actor, status, resolution_note):
+    if status not in (Complaint.Status.UPHELD, Complaint.Status.DISMISSED):
+        raise ValidationError('Outcome must be Upheld or Dismissed.')
+    if not resolution_note.strip():
+        raise ValidationError('A resolution note is required — this becomes the public response.')
+    if complaint.status != Complaint.Status.PENDING:
+        raise ValidationError(f'This complaint is already {complaint.get_status_display().lower()}.')
+    with transaction.atomic():
+        complaint.status = status
+        complaint.resolution_note = resolution_note.strip()
+        complaint.resolved_by = actor
+        complaint.resolved_at = timezone.now()
+        complaint.save(update_fields=['status', 'resolution_note', 'resolved_by', 'resolved_at'])
+        log_audit_event(
+            target=complaint, action=AuditEvent.Action.COMPLAINT_RESOLVED, actor=actor, reason=resolution_note,
+            new_value={'status': status},
+        )
+    return complaint

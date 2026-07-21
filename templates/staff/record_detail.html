@@ -70,4 +70,29 @@
   {% endfor %}
 </ul>
 {% endif %}
+
+{% if complaints %}
+<h3 style="margin-top: var(--space-4);">Complaints</h3>
+{% for c in complaints %}
+<div class="form-card" style="margin-bottom: var(--space-3);">
+  <p><strong>{{ c.complainant_name }}</strong> ({{ c.complainant_contact }})
+    <span class="badge {% if c.status == 'pending' %}badge-pending{% elif c.status == 'upheld' %}badge-approved{% else %}badge-rejected{% endif %}">
+      {{ c.get_status_display }}
+    </span>
+  </p>
+  <p>{{ c.description }}</p>
+  <p style="color: var(--muted); font-size: .8em;">Filed {{ c.submitted_at|date:"Y-m-d H:i" }}</p>
+  {% if c.status == 'pending' %}
+    <form method="post" action="{% url 'staff_complaint_resolve' c.id %}">
+      {% csrf_token %}
+      {{ complaint_resolve_form.as_p }}
+      <button class="btn" type="submit">Submit resolution</button>
+    </form>
+  {% else %}
+    <p><strong>Resolution:</strong> {{ c.resolution_note }}</p>
+    <p style="color: var(--muted); font-size: .8em;">Resolved by {{ c.resolved_by.username }} on {{ c.resolved_at|date:"Y-m-d" }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
 {% endblock %}

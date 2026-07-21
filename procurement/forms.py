@@ -309,3 +309,20 @@ class AwardForm(forms.Form):
         # as defense-in-depth).
         if solicitation is not None:
             self.fields['winning_bid'].queryset = solicitation.bids.filter(is_responsive=True)
+
+
+class ComplaintForm(forms.Form):
+    complainant_name = forms.CharField(max_length=255, required=True)
+    complainant_contact = forms.CharField(max_length=255, required=True, label='Email or phone')
+    description = forms.CharField(widget=forms.Textarea(attrs={'rows': 4}), required=True)
+
+
+class ComplaintResolveForm(forms.Form):
+    status = forms.ChoiceField(choices=[
+        ('upheld', 'Upheld'),
+        ('dismissed', 'Dismissed'),
+    ])
+    resolution_note = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3}), required=True,
+        help_text='Required — becomes the public response.',
+    )

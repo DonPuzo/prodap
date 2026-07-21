@@ -177,6 +177,43 @@
 {% endif %}
 
 <div class="flag-box">
+  <h3>{{ ui.complaints_heading }}</h3>
+  {% if complaints_resolved %}
+  <ul class="timeline">
+    {% for c in complaints_resolved %}
+    <li>
+      <div class="when">{{ c.resolved_at|date:"Y-m-d" }}</div>
+      <div class="transition">
+        <span class="badge {% if c.status == 'upheld' %}badge-approved{% else %}badge-rejected{% endif %}">
+          {% if c.status == 'upheld' %}{{ ui.complaint_upheld }}{% else %}{{ ui.complaint_dismissed }}{% endif %}
+        </span>
+      </div>
+      <div class="note">{{ c.resolution_note }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>{{ ui.no_complaints_yet }}</p>
+  {% endif %}
+  {% if complaints_pending_count %}
+  <p class="flag-count">{{ complaints_pending_count }} {{ ui.complaint_pending_note }}</p>
+  {% endif %}
+
+  <button type="button" class="btn btn-secondary flag-toggle" data-toggle-target="#complaint-form">
+    {{ ui.file_complaint_button }}
+  </button>
+  <form id="complaint-form" class="flag-form" method="post" action="{% url 'file_complaint' record.id %}">
+    {% csrf_token %}
+    <p><label for="id_complainant_name">{{ ui.complainant_name_label }}</label>
+      <input type="text" id="id_complainant_name" name="complainant_name"></p>
+    <p><label for="id_complainant_contact">{{ ui.complainant_contact_label }}</label>
+      <input type="text" id="id_complainant_contact" name="complainant_contact"></p>
+    <textarea name="description" placeholder="{{ ui.complaint_description_placeholder }}"></textarea>
+    <button class="btn" type="submit">{{ ui.file_complaint_submit }}</button>
+  </form>
+</div>
+
+<div class="flag-box">
   <h3>{{ ui.flag_heading }}</h3>
   <p class="flag-count">
     {% if flag_count %}

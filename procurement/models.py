@@ -468,6 +468,7 @@ class AuditEvent(models.Model):
         PREQUALIFICATION_REVIEWED = 'prequalification_reviewed', 'Prequalification Applicant Reviewed'
         BID_RECORDED = 'bid_recorded', 'Bid Recorded'
         AWARD_DECIDED = 'award_decided', 'Award Decided'
+        COMPLAINT_RESOLVED = 'complaint_resolved', 'Complaint Resolved'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -776,3 +777,49 @@ class Award(models.Model):
 
     def __str__(self):
         return f'Award: {self.solicitation.record.title} -> {self.winning_bid.vendor_name}'
+
+
+class Complaint(models.Model):
+    """Public complaint intake and resolution (blueprint Phase 3 —
+    Approvals, complaints handling). Anchored on ProcurementRecord
+    directly, not Solicitation — unlike Clarification/Bid, a complaint can
+    be filed at any stage of a project (before advertisement, during
+    tendering, or after award/implementation), not just while a tender is
+    open.
+
+    Visibility is deliberately NOT the same pattern as Clarification's
+    "both sides become public once resolved": here, `description` (the
+    complainant's own words) stays staff-only forever, even after
+    resolution. A complaint is inherently accusatory — publishing raw,
+    unverified allegations verbatim carries real reputational and
+    retaliation risk regardless of outcome. Only `resolution_note` (the
+    institution's own accountable output, same principle as Award's
+    decision_note) and the resolved outcome (upheld/dismissed) are
+    disclosed publicly, plus a pending count while unresolved.
+    `complainant_name`/`complainant_contact` are never public — kept only
+    so staff can follow up."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        UPHELD = 'upheld', 'Upheld'
+        DISMISSED = 'dismissed', 'Dismissed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    record = models.ForeignKey(ProcurementRecord, on_delete=models.PROTECT, related_name='complaints')
+    complainant_name = models.CharField(max_length=255)
+    complainant_contact = models.CharField(max_length=255, help_text='Email or phone — never shown publicly.')
+    description = models.TextField(help_text='Staff-only, even once resolved — see class docstring.')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    resolution_note = models.TextField(blank=True, help_text='Public once resolved.')
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='complaints_resolved',
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['submitted_at']
+
+    def __str__(self):
+        return f'Complaint on {self.record.title} ({self.get_status_display()})'

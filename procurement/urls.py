@@ -11,6 +11,7 @@ urlpatterns = [
     path('projects/<uuid:pk>/', views.public_record_detail, name='public_record_detail'),
     path('projects/<uuid:pk>/flag/', views.flag_record, name='flag_record'),
     path('projects/<uuid:pk>/ask/', views.submit_clarification, name='submit_clarification'),
+    path('projects/<uuid:pk>/complain/', views.file_complaint, name='file_complaint'),
     path('export/data.json', views.export_json, name='export_json'),
     path('export/data.csv', views.export_csv, name='export_csv'),
     path('set-lang/<str:lang_code>/', views.set_lang, name='set_lang'),
@@ -81,4 +82,5 @@ urlpatterns = [
     ),
     path('staff/solicitations/<uuid:pk>/bids/add/', views.staff_bid_add, name='staff_bid_add'),
     path('staff/solicitations/<uuid:pk>/award/', views.staff_award_decide, name='staff_award_decide'),
+    path('staff/complaints/<uuid:pk>/resolve/', views.staff_complaint_resolve, name='staff_complaint_resolve'),
 ]

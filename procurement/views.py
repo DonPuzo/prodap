@@ -17,6 +17,8 @@ from .forms import (
     BidForm,
     ClarificationAnswerForm,
     ClarificationQuestionForm,
+    ComplaintForm,
+    ComplaintResolveForm,
     FundsConfirmationForm,
     FundsDeclineForm,
     LocalizedAuthenticationForm,
@@ -35,8 +37,8 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Bid, Clarification, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
-    Requisition, Solicitation, User,
+    Bid, Clarification, Complaint, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord,
+    RecordFlag, Requisition, Solicitation, User,
 )
 from .permissions import role_required
 from .services import (
@@ -59,9 +61,11 @@ from .services import (
     reject_plan,
     reject_plan_line,
     reject_solicitation,
+    resolve_complaint,
     review_prequalification_applicant,
     review_requisition_packaging,
     submit_clarification_question,
+    submit_complaint,
     submit_plan,
     submit_requisition,
     transition_status,
@@ -197,6 +201,13 @@ def public_record_detail(request, pk):
     if advertisement and hasattr(advertisement.solicitation, 'award'):
         award = advertisement.solicitation.award
         bids = advertisement.solicitation.bids.all()
+    # Complaints: unlike Clarification, the complainant's own text
+    # (description) never becomes public even once resolved — only the
+    # institution's resolution note and the outcome. See Complaint's
+    # docstring for why this differs from the Q&A disclosure pattern.
+    all_complaints = record.complaints.all()
+    complaints_resolved = [c for c in all_complaints if c.status != Complaint.Status.PENDING]
+    complaints_pending_count = sum(1 for c in all_complaints if c.status == Complaint.Status.PENDING)
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -209,6 +220,8 @@ def public_record_detail(request, pk):
         'reviewed_applicants': reviewed_applicants,
         'award': award,
         'bids': bids,
+        'complaints_resolved': complaints_resolved,
+        'complaints_pending_count': complaints_pending_count,
     })
 
 
@@ -245,6 +258,28 @@ def submit_clarification(request, pk):
                 messages.success(request, ui['ask_question_submitted_message'])
             except ValidationError as exc:
                 messages.info(request, exc.message)
+    return redirect('public_record_detail', pk=record.id)
+
+
+def file_complaint(request, pk):
+    """Public, no login — file a complaint about this project at any
+    stage. Mirrors flag_record's/submit_clarification's shape."""
+    record = get_object_or_404(ProcurementRecord, pk=pk)
+    ui = get_strings(request.session.get('lang', DEFAULT_LANG))
+    if request.method == 'POST':
+        form = ComplaintForm(request.POST)
+        if form.is_valid():
+            try:
+                submit_complaint(
+                    record=record, complainant_name=form.cleaned_data['complainant_name'],
+                    complainant_contact=form.cleaned_data['complainant_contact'],
+                    description=form.cleaned_data['description'],
+                )
+                messages.success(request, ui['complaint_submitted_message'])
+            except ValidationError as exc:
+                messages.info(request, exc.message)
+        else:
+            messages.error(request, 'Please provide your name, contact information, and a description.')
     return redirect('public_record_detail', pk=record.id)
 
 
@@ -592,8 +627,10 @@ def staff_record_detail(request, pk):
     solicitation = get_current_solicitation(record)
     versions = record.solicitations.all()
     advertisement = getattr(solicitation, 'advertisement', None) if solicitation else None
+    complaints = record.complaints.select_related('resolved_by').all()
     return render(request, 'staff/record_detail.html', {
         'record': record, 'solicitation': solicitation, 'versions': versions, 'advertisement': advertisement,
+        'complaints': complaints, 'complaint_resolve_form': ComplaintResolveForm(),
     })
 
 
@@ -777,3 +814,22 @@ def staff_award_decide(request, pk):
         else:
             messages.error(request, 'Invalid award submission — check the winning bid and required fields.')
     return redirect('staff_solicitation_detail', pk=solicitation.pk)
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_complaint_resolve(request, pk):
+    """Independent of Procurement Unit (whose conduct may be the subject
+    of the complaint) — same accountability reasoning as Complaint's own
+    docstring."""
+    complaint = get_object_or_404(Complaint, pk=pk)
+    if request.method == 'POST':
+        form = ComplaintResolveForm(request.POST)
+        if form.is_valid():
+            try:
+                resolve_complaint(
+                    complaint=complaint, actor=request.user,
+                    status=form.cleaned_data['status'], resolution_note=form.cleaned_data['resolution_note'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_record_detail', pk=complaint.record_id)

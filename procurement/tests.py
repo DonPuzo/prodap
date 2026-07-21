@@ -11,6 +11,7 @@ from .models import (
     AuditEvent,
     Bid,
     Clarification,
+    Complaint,
     FinancialYear,
     PlanLine,
     PrequalificationApplicant,
@@ -44,9 +45,11 @@ from .services import (
     reject_plan,
     reject_plan_line,
     reject_solicitation,
+    resolve_complaint,
     review_prequalification_applicant,
     review_requisition_packaging,
     submit_clarification_question,
+    submit_complaint,
     submit_plan,
     submit_requisition,
     transition_status,
@@ -1344,6 +1347,123 @@ class AwardTests(TestCase):
         self.assertEqual(self.record.status, 'Awarded')
 
 
+class ComplaintTests(TestCase):
+    """Public complaint intake and resolution (blueprint Phase 3 —
+    Approvals). Anchored on ProcurementRecord directly, so setup is
+    lighter than Bid/Clarification/Prequalification — no solicitation
+    chain needed, a complaint can be filed at any stage."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.creator = User.objects.create_user(username='pu_complaint', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_complaint', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.other_staff = User.objects.create_user(username='ru_complaint', password='x', role=User.Role.REQUESTING_UNIT)
+        self.record = make_record(self.law_profile, self.creator)
+
+    def test_submit_requires_name_contact_and_description(self):
+        with self.assertRaises(ValidationError):
+            submit_complaint(record=self.record, complainant_name='', complainant_contact='a@b.com', description='x')
+        with self.assertRaises(ValidationError):
+            submit_complaint(record=self.record, complainant_name='Jane Doe', complainant_contact='', description='x')
+        with self.assertRaises(ValidationError):
+            submit_complaint(record=self.record, complainant_name='Jane Doe', complainant_contact='a@b.com', description='')
+
+    def test_submit_works_regardless_of_record_status(self):
+        # Unlike Clarification/Bid, no gating by advertisement/closing date —
+        # a complaint can be filed at any stage.
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='The process seemed rushed.',
+        )
+        self.assertEqual(complaint.status, Complaint.Status.PENDING)
+
+    def test_resolve_requires_valid_outcome_and_note(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concerned about vendor selection.',
+        )
+        with self.assertRaises(ValidationError):
+            resolve_complaint(complaint=complaint, actor=self.approver, status='pending', resolution_note='x')
+        with self.assertRaises(ValidationError):
+            resolve_complaint(complaint=complaint, actor=self.approver, status=Complaint.Status.DISMISSED, resolution_note='')
+
+    def test_resolve_twice_raises(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concerned about vendor selection.',
+        )
+        resolve_complaint(
+            complaint=complaint, actor=self.approver, status=Complaint.Status.DISMISSED,
+            resolution_note='Reviewed — no irregularity found.',
+        )
+        with self.assertRaises(ValidationError):
+            resolve_complaint(
+                complaint=complaint, actor=self.approver, status=Complaint.Status.UPHELD, resolution_note='Again.',
+            )
+
+    def test_pending_complaint_description_not_publicly_visible(self):
+        submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concerned about vendor selection secretly favoring a bidder.',
+        )
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertNotContains(response, 'Concerned about vendor selection secretly favoring a bidder.')
+        self.assertContains(response, '1 complaint(s) under review.')
+
+    def test_full_happy_path_resolution_visible_but_description_stays_private(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concerned about vendor selection secretly favoring a bidder.',
+        )
+        resolve_complaint(
+            complaint=complaint, actor=self.approver, status=Complaint.Status.DISMISSED,
+            resolution_note='Reviewed the evaluation records — no irregularity found.',
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='complaint', action=AuditEvent.Action.COMPLAINT_RESOLVED,
+            ).exists()
+        )
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, 'Reviewed the evaluation records — no irregularity found.')
+        # The raw complaint text and the complainant's contact info stay
+        # private forever, even once resolved — see Complaint's docstring.
+        self.assertNotContains(response, 'Concerned about vendor selection secretly favoring a bidder.')
+        self.assertNotContains(response, 'jane@example.com')
+
+    def test_resolve_view_rejects_wrong_role(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com', description='x',
+        )
+        self.client.force_login(self.other_staff)
+        response = self.client.post(
+            reverse('staff_complaint_resolve', args=[complaint.id]),
+            {'status': 'dismissed', 'resolution_note': 'No issue found.'},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_resolve_view_allows_accounting_officer(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com', description='x',
+        )
+        self.client.force_login(self.approver)
+        response = self.client.post(
+            reverse('staff_complaint_resolve', args=[complaint.id]),
+            {'status': 'dismissed', 'resolution_note': 'No issue found.'},
+        )
+        self.assertEqual(response.status_code, 302)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.DISMISSED)
+
+    def test_file_complaint_view_public_no_login(self):
+        response = self.client.post(reverse('file_complaint', args=[self.record.id]), {
+            'complainant_name': 'Jane Doe', 'complainant_contact': 'jane@example.com',
+            'description': 'The advertised deadline was too short.',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.record.complaints.count(), 1)
+
+
 class SolicitationViewRoleGateTests(TestCase):
     def setUp(self):
         self.law_profile = make_law_profile()
@@ -1432,4 +1552,13 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_add_permission(request=None))
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in Award._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_complaint_admin_has_no_add_permission(self):
+        from .admin import ComplaintAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = ComplaintAdmin(Complaint, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Complaint._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)

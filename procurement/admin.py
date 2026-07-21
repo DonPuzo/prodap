@@ -7,6 +7,7 @@ from .models import (
     Award,
     Bid,
     Clarification,
+    Complaint,
     FinancialYear,
     LawProfile,
     PlanLine,
@@ -232,6 +233,25 @@ class AwardAdmin(admin.ModelAdmin):
 
     list_display = ('solicitation', 'winning_bid', 'awarded_by', 'awarded_at')
     readonly_fields = [f.name for f in Award._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Complaint)
+class ComplaintAdmin(admin.ModelAdmin):
+    """Every field is either public-submitted (complainant_name/contact/
+    description) or service-written-once via resolve_complaint() — no
+    legitimate admin edit path. Admin can still see complainant contact
+    details for legitimate follow-up (superuser/staff already have
+    inherent trust in this single-institution deployment)."""
+
+    list_display = ('record', 'complainant_name', 'status', 'submitted_at', 'resolved_by')
+    list_filter = ('status',)
+    readonly_fields = [f.name for f in Complaint._meta.fields]
 
     def has_add_permission(self, request):
         return False
