@@ -133,6 +133,32 @@
   <p>{{ ui.no_prequalified_bidders }}</p>
   {% endif %}
 </div>
+
+{% if award %}
+<div class="flag-box">
+  <h3>{{ ui.award_heading }}</h3>
+  <p>{{ award.decision_note }}</p>
+  {% if award.bpp_no_objection_reference %}
+  <p style="color: var(--muted); font-size: .85em;">BPP No-Objection: {{ award.bpp_no_objection_reference }} ({{ award.bpp_no_objection_date }})</p>
+  {% endif %}
+  <p style="color: var(--muted); font-size: .85em;">{{ award.awarded_at|date:"Y-m-d" }}</p>
+</div>
+
+<div class="flag-box">
+  <h3>{{ ui.bids_heading }}</h3>
+  <ul class="timeline">
+    {% for b in bids %}
+    <li>
+      <div class="transition">{{ b.vendor_name }} — ₦{{ b.bid_amount|floatformat:0|intcomma }}
+        <span class="badge {% if b.is_responsive %}badge-approved{% else %}badge-rejected{% endif %}">
+          {% if b.is_responsive %}{{ ui.bid_responsive }}{% else %}{{ ui.bid_not_responsive }}{% endif %}
+        </span>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 {% endif %}
 
 <h3>{{ ui.status_history }}</h3>

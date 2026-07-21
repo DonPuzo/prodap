@@ -466,6 +466,8 @@ class AuditEvent(models.Model):
         CLARIFICATION_ANSWERED = 'clarification_answered', 'Clarification Answered'
         PREQUALIFICATION_RECORDED = 'prequalification_recorded', 'Prequalification Applicant Recorded'
         PREQUALIFICATION_REVIEWED = 'prequalification_reviewed', 'Prequalification Applicant Reviewed'
+        BID_RECORDED = 'bid_recorded', 'Bid Recorded'
+        AWARD_DECIDED = 'award_decided', 'Award Decided'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -694,3 +696,83 @@ class PrequalificationApplicant(models.Model):
 
     def __str__(self):
         return f'{self.vendor_name} — {self.solicitation.record.title} ({self.get_outcome_display()})'
+
+
+class Bid(models.Model):
+    """Staff-recorded administrative log of bids received against a
+    published Solicitation — NOT a submission channel. The encrypted bid
+    vault (digital signatures, authorized opening, tamper-evident logs)
+    remains entirely separate future work; this only records, after the
+    bidding window has closed, what a Procurement Unit member received by
+    other means (physical/email), so the Award decision below has an
+    honest evidentiary trail to point at instead of a free-typed vendor
+    name and amount."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    solicitation = models.ForeignKey(Solicitation, on_delete=models.PROTECT, related_name='bids')
+    vendor_name = models.CharField(max_length=255)
+    vendor_registration_no = models.CharField(max_length=100, blank=True)
+    bid_amount = models.DecimalField(max_digits=16, decimal_places=2)
+    is_responsive = models.BooleanField(
+        default=True,
+        help_text='Whether this bid meets the solicitation\'s eligibility/technical requirements. '
+                   'A non-responsive bid is still recorded, not omitted — an honest record of what '
+                   'was actually received — but cannot be selected as the winning bid.',
+    )
+    note = models.TextField(blank=True, help_text='e.g. reason for non-responsiveness.')
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='bids_recorded'
+    )
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['recorded_at']
+
+    def __str__(self):
+        return f'{self.vendor_name}: ₦{self.bid_amount} ({self.solicitation.record.title})'
+
+
+class Award(models.Model):
+    """The award decision for a Solicitation — the only sanctioned
+    *service-layer* way a ProcurementRecord's vendor_name/
+    vendor_registration_no/awarded_cost fields get set with a real
+    evidentiary trail from Phase 3 onward (see services.award_solicitation).
+    OneToOne: one award per solicitation, DB-enforced.
+
+    Note: the pre-existing generic staff_status_transition view (Phase 1
+    MVP, @login_required only, not role-gated) can still manually flip a
+    record's status field to 'Awarded' from most other statuses without
+    going through this model at all — a known, cross-cutting limitation
+    predating this feature (same gap already applies to every other status
+    value), not something this slice introduces or can fully close on its
+    own. StatusTransitionForm's new exclusion (Advertised/Tendering ->
+    Awarded) narrows this the same way the Phase 2 slice narrowed it for
+    Advertised, but does not close it for every current-status starting
+    point. A future hardening pass should either role-gate that view per
+    transition or enforce the Award-must-exist invariant inside
+    transition_status()/ProcurementRecord itself.
+
+    Deliberately does not duplicate the award amount — record.awarded_cost
+    is copied from winning_bid.bid_amount at award time, read live from
+    the bid rather than re-entered (same principle as
+    Solicitation.bpp_prior_review_required).
+
+    decision_note is intentionally PUBLIC once an Award exists — unlike
+    Clarification's raw question text or PrequalificationApplicant's
+    review_note (both staff-only until/unless resolved), this is the
+    award justification itself, which the integration framework's own
+    disclosure rules require to be published for oversight."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    solicitation = models.OneToOneField(Solicitation, on_delete=models.PROTECT, related_name='award')
+    winning_bid = models.ForeignKey(Bid, on_delete=models.PROTECT, related_name='+')
+    decision_note = models.TextField(help_text='Award justification — public once decided.')
+    bpp_no_objection_reference = models.CharField(max_length=100, blank=True)
+    bpp_no_objection_date = models.DateField(null=True, blank=True)
+    awarded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='awards_decided'
+    )
+    awarded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Award: {self.solicitation.record.title} -> {self.winning_bid.vendor_name}'

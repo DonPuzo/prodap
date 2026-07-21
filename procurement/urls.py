@@ -79,4 +79,6 @@ urlpatterns = [
         'staff/prequalification/<uuid:pk>/review/',
         views.staff_prequalification_review, name='staff_prequalification_review',
     ),
+    path('staff/solicitations/<uuid:pk>/bids/add/', views.staff_bid_add, name='staff_bid_add'),
+    path('staff/solicitations/<uuid:pk>/award/', views.staff_award_decide, name='staff_award_decide'),
 ]

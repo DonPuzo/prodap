@@ -100,6 +100,10 @@ STRINGS = {
         'no_prequalified_bidders': 'No prequalification outcomes have been published for this tender yet.',
         'outcome_qualified': 'Qualified',
         'outcome_not_qualified': 'Not Qualified',
+        'award_heading': 'Award Decision',
+        'bids_heading': 'Bids Received',
+        'bid_responsive': 'Responsive',
+        'bid_not_responsive': 'Non-responsive',
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -193,6 +197,10 @@ STRINGS = {
         'no_prequalified_bidders': 'No prequalification result don dey published for dis tender yet.',
         'outcome_qualified': 'E Qualify',
         'outcome_not_qualified': 'E No Qualify',
+        'award_heading': 'Wetin Dem Decide (Award)',
+        'bids_heading': 'Bids Wey Come',
+        'bid_responsive': 'E Correct',
+        'bid_not_responsive': 'E No Correct',
     },
 }
 

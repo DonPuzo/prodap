@@ -13,6 +13,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 
 from .forms import (
     AdvertisementForm,
+    AwardForm,
+    BidForm,
     ClarificationAnswerForm,
     ClarificationQuestionForm,
     FundsConfirmationForm,
@@ -33,7 +35,7 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Clarification, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
+    Bid, Clarification, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
     Requisition, Solicitation, User,
 )
 from .permissions import role_required
@@ -42,6 +44,7 @@ from .services import (
     approve_plan,
     approve_plan_line,
     approve_solicitation,
+    award_solicitation,
     confirm_requisition_funds,
     create_record_from_requisition,
     decline_requisition_funds,
@@ -51,6 +54,7 @@ from .services import (
     get_published_advertisement,
     prepare_solicitation,
     publish_advertisement,
+    record_bid,
     record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
@@ -183,6 +187,16 @@ def public_record_detail(request, pk):
             a for a in advertisement.solicitation.prequalification_applicants.all()
             if a.outcome != PrequalificationApplicant.Outcome.PENDING
         ]
+    # Bids and the award decision are only disclosed once the award has
+    # actually been decided — not mid-evaluation, same "resolved becomes
+    # public" timing as clarifications/prequalification, avoids leaking
+    # competitive intelligence to other bidders while bids are still being
+    # compiled.
+    award = None
+    bids = []
+    if advertisement and hasattr(advertisement.solicitation, 'award'):
+        award = advertisement.solicitation.award
+        bids = advertisement.solicitation.bids.all()
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -193,6 +207,8 @@ def public_record_detail(request, pk):
         'clarifications_pending_count': clarifications_pending_count,
         'can_ask_question': can_ask_question,
         'reviewed_applicants': reviewed_applicants,
+        'award': award,
+        'bids': bids,
     })
 
 
@@ -608,11 +624,15 @@ def staff_solicitation_detail(request, pk):
     advertisement = getattr(solicitation, 'advertisement', None)
     clarifications = solicitation.clarifications.select_related('answered_by').all()
     applicants = solicitation.prequalification_applicants.select_related('recorded_by', 'reviewed_by').all()
+    bids = solicitation.bids.select_related('recorded_by').all()
+    award = getattr(solicitation, 'award', None)
     return render(request, 'staff/solicitation_detail.html', {
         'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
         'clarifications': clarifications, 'answer_form': ClarificationAnswerForm(),
         'applicants': applicants, 'applicant_form': PrequalificationApplicantForm(),
         'review_form': PrequalificationReviewForm(),
+        'bids': bids, 'award': award, 'bid_form': BidForm(),
+        'award_form': AwardForm(solicitation=solicitation) if not award else None,
     })
 
 
@@ -716,3 +736,44 @@ def staff_prequalification_review(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message)
     return redirect('staff_solicitation_detail', pk=applicant.solicitation_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_bid_add(request, pk):
+    solicitation = get_object_or_404(Solicitation, pk=pk)
+    if request.method == 'POST':
+        form = BidForm(request.POST)
+        if form.is_valid():
+            try:
+                record_bid(
+                    solicitation=solicitation, actor=request.user,
+                    vendor_name=form.cleaned_data['vendor_name'],
+                    vendor_registration_no=form.cleaned_data['vendor_registration_no'],
+                    bid_amount=form.cleaned_data['bid_amount'],
+                    is_responsive=form.cleaned_data['is_responsive'],
+                    note=form.cleaned_data['note'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=solicitation.pk)
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_award_decide(request, pk):
+    solicitation = get_object_or_404(Solicitation, pk=pk)
+    if request.method == 'POST':
+        form = AwardForm(request.POST, solicitation=solicitation)
+        if form.is_valid():
+            try:
+                award_solicitation(
+                    solicitation=solicitation, actor=request.user,
+                    winning_bid=form.cleaned_data['winning_bid'],
+                    decision_note=form.cleaned_data['decision_note'],
+                    bpp_no_objection_reference=form.cleaned_data['bpp_no_objection_reference'],
+                    bpp_no_objection_date=form.cleaned_data['bpp_no_objection_date'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+        else:
+            messages.error(request, 'Invalid award submission — check the winning bid and required fields.')
+    return redirect('staff_solicitation_detail', pk=solicitation.pk)

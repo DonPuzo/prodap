@@ -4,6 +4,8 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from .models import (
     Advertisement,
     AuditEvent,
+    Award,
+    Bid,
     Clarification,
     FinancialYear,
     LawProfile,
@@ -198,6 +200,38 @@ class PrequalificationApplicantAdmin(admin.ModelAdmin):
     list_display = ('vendor_name', 'solicitation', 'outcome', 'recorded_by', 'reviewed_by')
     list_filter = ('outcome',)
     readonly_fields = [f.name for f in PrequalificationApplicant._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Bid)
+class BidAdmin(admin.ModelAdmin):
+    """Every field is staff-entered-once via services.record_bid() — no
+    legitimate admin edit path, same lockdown posture as every sibling
+    admin added this session."""
+
+    list_display = ('vendor_name', 'solicitation', 'bid_amount', 'is_responsive', 'recorded_by')
+    list_filter = ('is_responsive',)
+    readonly_fields = [f.name for f in Bid._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Award)
+class AwardAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via services.award_solicitation()
+    — no legitimate admin edit path."""
+
+    list_display = ('solicitation', 'winning_bid', 'awarded_by', 'awarded_at')
+    readonly_fields = [f.name for f in Award._meta.fields]
 
     def has_add_permission(self, request):
         return False

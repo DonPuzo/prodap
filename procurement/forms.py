@@ -2,7 +2,9 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm
 
 from .i18n import DEFAULT_LANG, get_strings
-from .models import Advertisement, LawProfile, PlanLine, ProcurementPlan, ProcurementRecord, Requisition, Solicitation
+from .models import (
+    Advertisement, Bid, LawProfile, PlanLine, ProcurementPlan, ProcurementRecord, Requisition, Solicitation,
+)
 
 
 class LocalizedAuthenticationForm(AuthenticationForm):
@@ -92,6 +94,10 @@ class StatusTransitionForm(forms.Form):
             # services.publish_advertisement) — not a free manual pick, for
             # any record, legacy or Foundation-phase (Phase 2 slice).
             excluded.add(ProcurementRecord.Status.ADVERTISED)
+        if current_status in (ProcurementRecord.Status.ADVERTISED, ProcurementRecord.Status.TENDERING):
+            # Advertised/Tendering -> Awarded is now evidence-derived (see
+            # services.award_solicitation) — Phase 3 slice, same mechanism.
+            excluded.add(ProcurementRecord.Status.AWARDED)
         choices = [c for c in ProcurementRecord.Status.choices if c[0] not in excluded]
         self.fields['new_status'].choices = choices
 
@@ -275,3 +281,31 @@ class PrequalificationReviewForm(forms.Form):
         ('not_qualified', 'Not Qualified'),
     ])
     note = forms.CharField(widget=forms.Textarea(attrs={'rows': 3}), required=True)
+
+
+class BidForm(forms.Form):
+    vendor_name = forms.CharField(max_length=255, required=True)
+    vendor_registration_no = forms.CharField(max_length=100, required=False)
+    bid_amount = forms.DecimalField(max_digits=16, decimal_places=2, min_value=0.01, required=True)
+    is_responsive = forms.BooleanField(required=False, initial=True, label='Responsive')
+    note = forms.CharField(widget=forms.Textarea(attrs={'rows': 2}), required=False)
+
+
+class AwardForm(forms.Form):
+    winning_bid = forms.ModelChoiceField(queryset=Bid.objects.none(), required=True)
+    decision_note = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3}), required=True,
+        help_text='Required — becomes the public award justification.',
+    )
+    bpp_no_objection_reference = forms.CharField(max_length=100, required=False)
+    bpp_no_objection_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=False)
+
+    def __init__(self, *args, solicitation=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Only that solicitation's own responsive bids may be selected —
+        # enforced here (not just hidden in the template) so a stale page
+        # or crafted POST can't award to a bid from a different tender or a
+        # disqualified one (services.award_solicitation re-checks this too,
+        # as defense-in-depth).
+        if solicitation is not None:
+            self.fields['winning_bid'].queryset = solicitation.bids.filter(is_responsive=True)

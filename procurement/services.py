@@ -9,6 +9,8 @@ from django.utils import timezone
 from .models import (
     Advertisement,
     AuditEvent,
+    Award,
+    Bid,
     Clarification,
     PlanLine,
     PrequalificationApplicant,
@@ -525,3 +527,68 @@ def review_prequalification_applicant(*, applicant, actor, outcome, note):
             new_value={'outcome': outcome},
         )
     return applicant
+
+
+# --- Bid recording & Award decision (blueprint Phase 3 — Approvals, first
+# slice): staff-recorded administrative log of bids received, not a
+# submission channel (see Bid's docstring) — followed by an Award decision
+# that is now the only sanctioned way to reach Awarded status. ---
+
+
+def record_bid(*, solicitation, actor, vendor_name, vendor_registration_no='', bid_amount, is_responsive=True, note=''):
+    if solicitation.status != Solicitation.Status.APPROVED or not hasattr(solicitation, 'advertisement'):
+        raise ValidationError('This solicitation has not been published — nothing to record bids against yet.')
+    if timezone.localdate() <= solicitation.advertisement.closing_date:
+        raise ValidationError('Bids can only be recorded after the bidding period has closed.')
+    if not vendor_name.strip():
+        raise ValidationError('A vendor name is required.')
+    if not bid_amount or bid_amount <= 0:
+        raise ValidationError('A positive bid amount is required.')
+    with transaction.atomic():
+        bid = Bid.objects.create(
+            solicitation=solicitation, vendor_name=vendor_name.strip(),
+            vendor_registration_no=vendor_registration_no.strip(), bid_amount=bid_amount,
+            is_responsive=is_responsive, note=note.strip(), recorded_by=actor,
+        )
+        log_audit_event(target=bid, action=AuditEvent.Action.BID_RECORDED, actor=actor)
+    return bid
+
+
+def award_solicitation(
+    *, solicitation, actor, winning_bid, decision_note,
+    bpp_no_objection_reference='', bpp_no_objection_date=None,
+):
+    record = solicitation.record
+    if record.status not in (ProcurementRecord.Status.ADVERTISED, ProcurementRecord.Status.TENDERING):
+        raise ValidationError(f'This record is {record.status} — an award cannot be decided from this status.')
+    if hasattr(solicitation, 'award'):
+        raise ValidationError('This solicitation has already been awarded.')
+    if winning_bid.solicitation_id != solicitation.id:
+        raise ValidationError('The winning bid must belong to this solicitation.')
+    if not winning_bid.is_responsive:
+        raise ValidationError('A non-responsive bid cannot be selected as the winner.')
+    if not decision_note.strip():
+        raise ValidationError('A decision note is required — this becomes the public award justification.')
+    if solicitation.bpp_prior_review_required and not (bpp_no_objection_reference.strip() and bpp_no_objection_date):
+        raise ValidationError(
+            'BPP Certificate of No Objection is required before award, per the determined procurement method.'
+        )
+    with transaction.atomic():
+        award = Award.objects.create(
+            solicitation=solicitation, winning_bid=winning_bid, decision_note=decision_note.strip(),
+            bpp_no_objection_reference=bpp_no_objection_reference.strip(), bpp_no_objection_date=bpp_no_objection_date,
+            awarded_by=actor,
+        )
+        record.vendor_name = winning_bid.vendor_name
+        record.vendor_registration_no = winning_bid.vendor_registration_no
+        record.awarded_cost = winning_bid.bid_amount
+        record.save(update_fields=['vendor_name', 'vendor_registration_no', 'awarded_cost', 'updated_at'])
+        log_audit_event(
+            target=award, action=AuditEvent.Action.AWARD_DECIDED, actor=actor, reason=decision_note,
+            new_value={'vendor_name': winning_bid.vendor_name, 'awarded_cost': str(winning_bid.bid_amount)},
+        )
+        transition_status(
+            record=record, new_status=ProcurementRecord.Status.AWARDED, updated_by=actor,
+            note=f'Awarded to {winning_bid.vendor_name} — ₦{winning_bid.bid_amount}.',
+        )
+    return award

@@ -89,4 +89,52 @@
   </form>
 </div>
 {% endif %}
+
+{% if advertisement %}
+<h3 style="margin-top: var(--space-4);">Bids</h3>
+{% for b in bids %}
+<div class="form-card" style="margin-bottom: var(--space-3);">
+  <p><strong>{{ b.vendor_name }}</strong>{% if b.vendor_registration_no %} — {{ b.vendor_registration_no }}{% endif %}
+    — ₦{{ b.bid_amount|floatformat:0 }}
+    <span class="badge {% if b.is_responsive %}badge-approved{% else %}badge-rejected{% endif %}">
+      {% if b.is_responsive %}Responsive{% else %}Non-responsive{% endif %}
+    </span>
+  </p>
+  {% if b.note %}<p>{{ b.note }}</p>{% endif %}
+  <p style="color: var(--muted); font-size: .8em;">Recorded by {{ b.recorded_by.username }} on {{ b.recorded_at|date:"Y-m-d" }}</p>
+</div>
+{% endfor %}
+<div class="form-card">
+  <form method="post" action="{% url 'staff_bid_add' solicitation.id %}">
+    {% csrf_token %}
+    {{ bid_form.as_p }}
+    <button class="btn" type="submit">Record bid</button>
+  </form>
+</div>
+
+<h3 style="margin-top: var(--space-4);">Award</h3>
+{% if award %}
+<div class="form-card">
+  <p><strong>Awarded to {{ award.winning_bid.vendor_name }}</strong> — ₦{{ award.winning_bid.bid_amount|floatformat:0 }}</p>
+  <p>{{ award.decision_note }}</p>
+  {% if award.bpp_no_objection_reference %}
+  <p style="color: var(--muted); font-size: .85em;">BPP No-Objection: {{ award.bpp_no_objection_reference }} ({{ award.bpp_no_objection_date }})</p>
+  {% endif %}
+  <p style="color: var(--muted); font-size: .8em;">Decided by {{ award.awarded_by.username }} on {{ award.awarded_at|date:"Y-m-d" }}</p>
+</div>
+{% elif bids %}
+<div class="form-card">
+  {% if solicitation.bpp_prior_review_required %}
+  <p class="message">This method requires a BPP Certificate of No Objection before award.</p>
+  {% endif %}
+  <form method="post" action="{% url 'staff_award_decide' solicitation.id %}">
+    {% csrf_token %}
+    {{ award_form.as_p }}
+    <button class="btn" type="submit">Decide award</button>
+  </form>
+</div>
+{% else %}
+<p style="color: var(--muted);">Record at least one bid before an award can be decided.</p>
+{% endif %}
+{% endif %}
 {% endblock %}

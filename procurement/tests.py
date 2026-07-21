@@ -7,7 +7,9 @@ from django.urls import reverse
 from .forms import ProcurementRecordForm, RequisitionForm
 from .models import (
     Advertisement,
+    Award,
     AuditEvent,
+    Bid,
     Clarification,
     FinancialYear,
     PlanLine,
@@ -28,6 +30,7 @@ from .services import (
     approve_plan,
     approve_plan_line,
     approve_solicitation,
+    award_solicitation,
     confirm_requisition_funds,
     create_record_from_requisition,
     determine_default_method,
@@ -36,6 +39,7 @@ from .services import (
     get_current_solicitation,
     prepare_solicitation,
     publish_advertisement,
+    record_bid,
     record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
@@ -1116,6 +1120,230 @@ class PrequalificationTests(TestCase):
         self.assertEqual(solicitation.prequalification_applicants.count(), 1)
 
 
+class AwardTests(TestCase):
+    """Bid recording & Award decision (blueprint Phase 3 — Approvals, first
+    slice). Bids are a staff-recorded administrative log, not a submission
+    channel — see Bid's docstring in models.py."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_award', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_award', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_award', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_award', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+    def publish_and_close(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        closing = datetime.date.today() + datetime.timedelta(days=30)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=closing,
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        return solicitation
+
+    def test_record_bid_before_closing_is_rejected(self):
+        solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        with self.assertRaises(ValidationError):
+            record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+
+    def test_record_bid_requires_vendor_name_and_positive_amount(self):
+        solicitation = self.publish_and_close()
+        with self.assertRaises(ValidationError):
+            record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='', bid_amount=480_000)
+        with self.assertRaises(ValidationError):
+            record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=0)
+
+    def test_award_requires_bid_from_same_solicitation(self):
+        solicitation = self.publish_and_close()
+        other_record = make_record(self.law_profile, self.preparer)
+        other_solicitation = Solicitation.objects.create(
+            record=other_record, prepared_by=self.preparer, **SOLICITATION_FIELDS
+        )
+        foreign_bid = Bid.objects.create(
+            solicitation=other_solicitation, vendor_name='Other Vendor', bid_amount=100_000, recorded_by=self.preparer,
+        )
+        with self.assertRaises(ValidationError):
+            award_solicitation(
+                solicitation=solicitation, actor=self.approver, winning_bid=foreign_bid,
+                decision_note='Lowest evaluated bid.',
+            )
+
+    def test_award_rejects_non_responsive_bid(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+            bid_amount=480_000, is_responsive=False, note='Missing bid security.',
+        )
+        with self.assertRaises(ValidationError):
+            award_solicitation(
+                solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.',
+            )
+
+    def test_award_requires_decision_note(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        with self.assertRaises(ValidationError):
+            award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='')
+
+    def test_award_requires_bpp_no_objection_when_flagged(self):
+        # The requisition's determined method already snapshotted
+        # bpp_prior_review_required=False at determination time (setUp) —
+        # flip it directly to simulate a method/threshold that required BPP
+        # prior review, without re-testing the determination engine itself
+        # (already covered by ThresholdRuleTests).
+        self.record.requisition.bpp_prior_review_required = True
+        self.record.requisition.save(update_fields=['bpp_prior_review_required'])
+
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        self.assertTrue(solicitation.bpp_prior_review_required)
+        with self.assertRaises(ValidationError):
+            award_solicitation(
+                solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.',
+            )
+        # Providing both BPP fields succeeds.
+        award_solicitation(
+            solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.',
+            bpp_no_objection_reference='BPP/NOC/2026/001', bpp_no_objection_date=datetime.date.today(),
+        )
+
+    def test_award_is_idempotent_guard(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.')
+        with self.assertRaises(ValidationError):
+            award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Again.')
+
+    def test_full_happy_path_award_sets_record_fields_and_status(self):
+        solicitation = self.publish_and_close()
+        losing_bid = record_bid(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Beta Supplies', bid_amount=495_000,
+        )
+        winning_bid = record_bid(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
+            vendor_registration_no='RC-123456', bid_amount=480_000,
+        )
+        award_solicitation(
+            solicitation=solicitation, actor=self.approver, winning_bid=winning_bid,
+            decision_note='Lowest evaluated responsive bid.',
+        )
+
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, ProcurementRecord.Status.AWARDED)
+        self.assertEqual(self.record.vendor_name, 'Acme Furniture Ltd')
+        self.assertEqual(self.record.vendor_registration_no, 'RC-123456')
+        self.assertEqual(self.record.awarded_cost, 480_000)
+
+        # Two StatusUpdate rows total: Planning->Advertised (from publish)
+        # and Advertised->Awarded (from this award) — StatusUpdate is
+        # ordered chronologically (Meta.ordering = ['updated_at']).
+        status_updates = StatusUpdate.objects.filter(record=self.record)
+        self.assertEqual(status_updates.count(), 2)
+        self.assertEqual(status_updates.last().old_status, 'Advertised')
+        self.assertEqual(status_updates.last().new_status, 'Awarded')
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='bid', action=AuditEvent.Action.BID_RECORDED
+            ).count() == 2
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='award', action=AuditEvent.Action.AWARD_DECIDED
+            ).exists()
+        )
+
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Acme Furniture Ltd')
+        self.assertContains(response, 'Beta Supplies')
+        self.assertContains(response, 'Lowest evaluated responsive bid.')
+
+    def test_awarded_no_longer_manually_selectable_from_advertised(self):
+        solicitation = self.publish_and_close()
+        self.client.force_login(self.preparer)
+        response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
+            'new_status': 'Awarded', 'note': 'Attempted manual bypass',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'Advertised')
+
+    def test_bid_add_view_rejects_wrong_role(self):
+        solicitation = self.publish_and_close()
+        self.client.force_login(self.requester)
+        response = self.client.post(
+            reverse('staff_bid_add', args=[solicitation.id]), {'vendor_name': 'Acme Furniture Ltd', 'bid_amount': '480000'}
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_bid_add_view_allows_procurement_unit(self):
+        solicitation = self.publish_and_close()
+        self.client.force_login(self.preparer)
+        response = self.client.post(
+            reverse('staff_bid_add', args=[solicitation.id]), {'vendor_name': 'Acme Furniture Ltd', 'bid_amount': '480000'}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(solicitation.bids.count(), 1)
+
+    def test_award_decide_view_rejects_wrong_role(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        self.client.force_login(self.preparer)  # procurement_unit, not accounting_officer
+        response = self.client.post(
+            reverse('staff_award_decide', args=[solicitation.id]),
+            {'winning_bid': str(bid.id), 'decision_note': 'Lowest bid.'},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_award_decide_view_allows_accounting_officer(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        self.client.force_login(self.approver)
+        response = self.client.post(
+            reverse('staff_award_decide', args=[solicitation.id]),
+            {'winning_bid': str(bid.id), 'decision_note': 'Lowest bid.'},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'Awarded')
+
+
 class SolicitationViewRoleGateTests(TestCase):
     def setUp(self):
         self.law_profile = make_law_profile()
@@ -1186,4 +1414,22 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_add_permission(request=None))
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in PrequalificationApplicant._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_bid_admin_has_no_add_permission(self):
+        from .admin import BidAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = BidAdmin(Bid, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Bid._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_award_admin_has_no_add_permission(self):
+        from .admin import AwardAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = AwardAdmin(Award, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Award._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)
