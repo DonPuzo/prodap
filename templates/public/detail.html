@@ -134,6 +134,14 @@
   {% endif %}
 </div>
 
+{% if tenders_board_review %}
+<div class="flag-box">
+  <h3>{{ ui.tenders_board_heading }}</h3>
+  <p>{{ tenders_board_review.evaluation_summary }}</p>
+  <p style="color: var(--muted); font-size: .85em;">{{ tenders_board_review.reviewed_at|date:"Y-m-d" }}</p>
+</div>
+{% endif %}
+
 {% if award %}
 <div class="flag-box">
   <h3>{{ ui.award_heading }}</h3>

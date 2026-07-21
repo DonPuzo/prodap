@@ -10,6 +10,7 @@ DEMO_USERS = [
     ('requester', 'requester@example.edu.ng', User.Role.REQUESTING_UNIT, False),
     ('finance', 'finance@example.edu.ng', User.Role.FINANCE, False),
     ('accounting_officer', 'accounting.officer@example.edu.ng', User.Role.ACCOUNTING_OFFICER, False),
+    ('tenders_board', 'tenders.board@example.edu.ng', User.Role.TENDERS_BOARD, False),
 ]
 
 

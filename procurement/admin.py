@@ -25,6 +25,7 @@ from .models import (
     Requisition,
     Solicitation,
     StatusUpdate,
+    TendersBoardReview,
     ThresholdRule,
     User,
 )
@@ -224,6 +225,21 @@ class BidAdmin(admin.ModelAdmin):
     list_display = ('vendor_name', 'solicitation', 'bid_amount', 'is_responsive', 'recorded_by')
     list_filter = ('is_responsive',)
     readonly_fields = [f.name for f in Bid._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(TendersBoardReview)
+class TendersBoardReviewAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via
+    services.record_tenders_board_review() — no legitimate admin edit path."""
+
+    list_display = ('solicitation', 'recommended_bid', 'quorum_present', 'reviewed_by', 'reviewed_at')
+    readonly_fields = [f.name for f in TendersBoardReview._meta.fields]
 
     def has_add_permission(self, request):
         return False

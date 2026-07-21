@@ -14,10 +14,12 @@ class User(AbstractUser):
         PROCUREMENT_UNIT = 'procurement_unit', 'Procurement Unit'
         FINANCE = 'finance', 'Finance/Budget'
         ACCOUNTING_OFFICER = 'accounting_officer', 'Accounting Officer'
+        TENDERS_BOARD = 'tenders_board', 'Tenders Board'
         ADMIN = 'admin', 'Admin'
-        # Reserved for later phases — not built yet (Phase 2-4 of the
-        # e-procurement integration framework): evaluation_committee,
-        # tenders_board, bpp_reviewer, contract_manager, bidder, observer.
+        # Reserved for later phases — not built yet: evaluation_committee
+        # (folded into Tenders Board's evaluation_summary for this slice —
+        # see TendersBoardReview's docstring), bpp_reviewer, contract_manager,
+        # bidder, observer.
 
     role = models.CharField(max_length=32, choices=Role.choices, default=Role.PROCUREMENT_UNIT)
 
@@ -477,6 +479,7 @@ class AuditEvent(models.Model):
         INVOICE_SUBMITTED = 'invoice_submitted', 'Invoice Submitted'
         INVOICE_REVIEWED = 'invoice_reviewed', 'Invoice Reviewed'
         PAYMENT_RECORDED = 'payment_recorded', 'Payment Recorded'
+        TENDERS_BOARD_REVIEWED = 'tenders_board_reviewed', 'Tenders Board Reviewed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -739,6 +742,41 @@ class Bid(models.Model):
 
     def __str__(self):
         return f'{self.vendor_name}: ₦{self.bid_amount} ({self.solicitation.record.title})'
+
+
+class TendersBoardReview(models.Model):
+    """The Tenders Board's recommendation on a Solicitation's bids
+    (blueprint steps 11-13 — evaluation and approval routing), the missing
+    stage between "bids received" and "award decided." From this slice
+    onward, services.award_solicitation() refuses to proceed without one —
+    same principle as every other evidence-before-status-change gate in
+    this app.
+
+    Deliberately does not model per-bid numeric scoring as a separate
+    table — evaluation_summary (the board's written rationale) serves as
+    a lightweight stand-in for a full Bid Evaluation Report. There are no
+    individual "board member" user accounts (same simplification already
+    used for Bid/PrequalificationApplicant — staff-recorded, not a
+    multi-user workflow), so this is recorded by one Tenders Board user on
+    the board's behalf, with quorum_present as an explicit written
+    attestation rather than derived from individual sign-offs.
+
+    The Accounting Officer retains final discretion at Award — this gate
+    only requires that independent evaluation happened and is on record,
+    not that the eventual award must match the board's recommendation."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    solicitation = models.OneToOneField(Solicitation, on_delete=models.PROTECT, related_name='tenders_board_review')
+    recommended_bid = models.ForeignKey(Bid, on_delete=models.PROTECT, related_name='+')
+    evaluation_summary = models.TextField(help_text='The board\'s written rationale — public once an award exists.')
+    quorum_present = models.BooleanField(default=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='tenders_board_reviews'
+    )
+    reviewed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Tenders Board review: {self.solicitation.record.title}'
 
 
 class Award(models.Model):

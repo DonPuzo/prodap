@@ -112,6 +112,25 @@
   </form>
 </div>
 
+<h3 style="margin-top: var(--space-4);">Tenders Board Review</h3>
+{% if tenders_board_review %}
+<div class="form-card">
+  <p><strong>Recommended: {{ tenders_board_review.recommended_bid.vendor_name }}</strong> — ₦{{ tenders_board_review.recommended_bid.bid_amount|floatformat:0 }}</p>
+  <p>{{ tenders_board_review.evaluation_summary }}</p>
+  <p style="color: var(--muted); font-size: .8em;">Reviewed by {{ tenders_board_review.reviewed_by.username }} on {{ tenders_board_review.reviewed_at|date:"Y-m-d" }}{% if not tenders_board_review.quorum_present %} — quorum was NOT present{% endif %}</p>
+</div>
+{% elif bids %}
+<div class="form-card">
+  <form method="post" action="{% url 'staff_tenders_board_review' solicitation.id %}">
+    {% csrf_token %}
+    {{ tenders_board_review_form.as_p }}
+    <button class="btn" type="submit">Record review</button>
+  </form>
+</div>
+{% else %}
+<p style="color: var(--muted);">Record at least one bid before the Tenders Board can review.</p>
+{% endif %}
+
 <h3 style="margin-top: var(--space-4);">Award</h3>
 {% if award %}
 <div class="form-card">
@@ -122,7 +141,7 @@
   {% endif %}
   <p style="color: var(--muted); font-size: .8em;">Decided by {{ award.awarded_by.username }} on {{ award.awarded_at|date:"Y-m-d" }}</p>
 </div>
-{% elif bids %}
+{% elif tenders_board_review %}
 <div class="form-card">
   {% if solicitation.bpp_prior_review_required %}
   <p class="message">This method requires a BPP Certificate of No Objection before award.</p>
@@ -134,7 +153,7 @@
   </form>
 </div>
 {% else %}
-<p style="color: var(--muted);">Record at least one bid before an award can be decided.</p>
+<p style="color: var(--muted);">A Tenders Board review is required before an award can be decided.</p>
 {% endif %}
 
 {% if award %}

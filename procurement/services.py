@@ -27,6 +27,7 @@ from .models import (
     Requisition,
     Solicitation,
     StatusUpdate,
+    TendersBoardReview,
     ThresholdRule,
 )
 
@@ -576,6 +577,31 @@ def record_bid(*, solicitation, actor, vendor_name, vendor_registration_no='', b
     return bid
 
 
+def record_tenders_board_review(*, solicitation, actor, recommended_bid, evaluation_summary, quorum_present=True):
+    """The evaluation/approval-routing stage (blueprint steps 11-13) —
+    from this slice onward, award_solicitation() refuses to proceed
+    without one. See TendersBoardReview's docstring for what's
+    deliberately not modeled (per-bid numeric scoring, individual board
+    member sign-offs)."""
+    if hasattr(solicitation, 'tenders_board_review'):
+        raise ValidationError('This solicitation already has a Tenders Board review on file.')
+    if recommended_bid.solicitation_id != solicitation.id:
+        raise ValidationError('The recommended bid must belong to this solicitation.')
+    if not recommended_bid.is_responsive:
+        raise ValidationError('A non-responsive bid cannot be recommended.')
+    if not evaluation_summary.strip():
+        raise ValidationError('A written evaluation summary is required.')
+    if not quorum_present:
+        raise ValidationError('The Tenders Board did not have quorum — no recommendation can be recorded.')
+    with transaction.atomic():
+        review = TendersBoardReview.objects.create(
+            solicitation=solicitation, recommended_bid=recommended_bid,
+            evaluation_summary=evaluation_summary.strip(), quorum_present=quorum_present, reviewed_by=actor,
+        )
+        log_audit_event(target=review, action=AuditEvent.Action.TENDERS_BOARD_REVIEWED, actor=actor)
+    return review
+
+
 def award_solicitation(
     *, solicitation, actor, winning_bid, decision_note,
     bpp_no_objection_reference='', bpp_no_objection_date=None,
@@ -586,6 +612,8 @@ def award_solicitation(
         raise ValidationError(f'This record is {record.status} — an award cannot be decided from this status.')
     if hasattr(solicitation, 'award'):
         raise ValidationError('This solicitation has already been awarded.')
+    if not hasattr(solicitation, 'tenders_board_review'):
+        raise ValidationError('A Tenders Board review is required before an award can be decided.')
     if winning_bid.solicitation_id != solicitation.id:
         raise ValidationError('The winning bid must belong to this solicitation.')
     if not winning_bid.is_responsive:

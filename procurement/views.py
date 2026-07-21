@@ -42,12 +42,13 @@ from .forms import (
     RequisitionForm,
     SolicitationForm,
     StatusTransitionForm,
+    TendersBoardReviewForm,
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
     Award, Bid, Clarification, Complaint, Contract, ContractCompletion, Invoice, Milestone, Payment,
     PerformanceGuarantee, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
-    Requisition, Solicitation, User,
+    Requisition, Solicitation, TendersBoardReview, User,
 )
 from .permissions import role_required
 from .services import (
@@ -72,6 +73,7 @@ from .services import (
     record_payment,
     record_performance_guarantee,
     record_prequalification_applicant,
+    record_tenders_board_review,
     reject_plan,
     reject_plan_line,
     reject_solicitation,
@@ -215,9 +217,15 @@ def public_record_detail(request, pk):
     # compiled.
     award = None
     bids = []
+    tenders_board_review = None
     if advertisement and hasattr(advertisement.solicitation, 'award'):
         award = advertisement.solicitation.award
         bids = advertisement.solicitation.bids.all()
+        # Same disclosure timing as the award decision itself — the
+        # blueprint's own rule is "evaluation information remains
+        # confidential until award notification," implying it's fair game
+        # afterward, same tier as Award.decision_note.
+        tenders_board_review = getattr(advertisement.solicitation, 'tenders_board_review', None)
     # Complaints: unlike Clarification, the complainant's own text
     # (description) never becomes public even once resolved — only the
     # institution's resolution note and the outcome. See Complaint's
@@ -259,6 +267,7 @@ def public_record_detail(request, pk):
         'reviewed_applicants': reviewed_applicants,
         'award': award,
         'bids': bids,
+        'tenders_board_review': tenders_board_review,
         'complaints_resolved': complaints_resolved,
         'complaints_pending_count': complaints_pending_count,
         'contract': contract,
@@ -711,6 +720,7 @@ def staff_solicitation_detail(request, pk):
     clarifications = solicitation.clarifications.select_related('answered_by').all()
     applicants = solicitation.prequalification_applicants.select_related('recorded_by', 'reviewed_by').all()
     bids = solicitation.bids.select_related('recorded_by').all()
+    tenders_board_review = getattr(solicitation, 'tenders_board_review', None)
     award = getattr(solicitation, 'award', None)
     contract = getattr(award, 'contract', None) if award else None
     milestones = contract.milestones.select_related('completed_by').all() if contract else []
@@ -732,7 +742,9 @@ def staff_solicitation_detail(request, pk):
         'applicants': applicants, 'applicant_form': PrequalificationApplicantForm(),
         'review_form': PrequalificationReviewForm(),
         'bids': bids, 'award': award, 'bid_form': BidForm(),
-        'award_form': AwardForm(solicitation=solicitation) if not award else None,
+        'tenders_board_review': tenders_board_review,
+        'tenders_board_review_form': TendersBoardReviewForm(solicitation=solicitation) if not tenders_board_review else None,
+        'award_form': AwardForm(solicitation=solicitation) if (tenders_board_review and not award) else None,
         'contract': contract, 'contract_form': ContractForm(),
         'milestones': milestones, 'milestone_form': MilestoneForm(), 'milestone_complete_form': MilestoneCompleteForm(),
         'guarantee': guarantee, 'guarantee_form': PerformanceGuaranteeForm(),
@@ -863,6 +875,26 @@ def staff_bid_add(request, pk):
                 )
             except ValidationError as exc:
                 messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=solicitation.pk)
+
+
+@role_required(User.Role.TENDERS_BOARD)
+def staff_tenders_board_review(request, pk):
+    solicitation = get_object_or_404(Solicitation, pk=pk)
+    if request.method == 'POST':
+        form = TendersBoardReviewForm(request.POST, solicitation=solicitation)
+        if form.is_valid():
+            try:
+                record_tenders_board_review(
+                    solicitation=solicitation, actor=request.user,
+                    recommended_bid=form.cleaned_data['recommended_bid'],
+                    evaluation_summary=form.cleaned_data['evaluation_summary'],
+                    quorum_present=form.cleaned_data['quorum_present'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+        else:
+            messages.error(request, 'Invalid review submission — check the required fields.')
     return redirect('staff_solicitation_detail', pk=solicitation.pk)
 
 

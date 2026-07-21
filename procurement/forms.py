@@ -301,6 +301,22 @@ class BidForm(forms.Form):
     note = forms.CharField(widget=forms.Textarea(attrs={'rows': 2}), required=False)
 
 
+class TendersBoardReviewForm(forms.Form):
+    recommended_bid = forms.ModelChoiceField(queryset=Bid.objects.none(), required=True)
+    evaluation_summary = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 4}), required=True,
+        help_text='Required — the board\'s written rationale, public once an award exists.',
+    )
+    quorum_present = forms.BooleanField(required=False, initial=True, label='Quorum was present')
+
+    def __init__(self, *args, solicitation=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Same defense-in-depth reasoning as AwardForm below: only that
+        # solicitation's own responsive bids may be recommended.
+        if solicitation is not None:
+            self.fields['recommended_bid'].queryset = solicitation.bids.filter(is_responsive=True)
+
+
 class AwardForm(forms.Form):
     winning_bid = forms.ModelChoiceField(queryset=Bid.objects.none(), required=True)
     decision_note = forms.CharField(

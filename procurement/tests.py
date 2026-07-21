@@ -27,6 +27,7 @@ from .models import (
     Requisition,
     Solicitation,
     StatusUpdate,
+    TendersBoardReview,
     ThresholdRule,
     User,
 )
@@ -53,6 +54,7 @@ from .services import (
     record_payment,
     record_performance_guarantee,
     record_prequalification_applicant,
+    record_tenders_board_review,
     reject_plan,
     reject_plan_line,
     reject_solicitation,
@@ -1137,6 +1139,131 @@ class PrequalificationTests(TestCase):
         self.assertEqual(solicitation.prequalification_applicants.count(), 1)
 
 
+class TendersBoardReviewTests(TestCase):
+    """The evaluation/approval-routing stage (blueprint steps 11-13) — from
+    this slice onward, award_solicitation() refuses to proceed without a
+    TendersBoardReview on file. This class covers record_tenders_board_review()'s
+    own validation; AwardTests covers the resulting gate on award_solicitation()."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_tbr', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_tbr', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_tbr', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_tbr', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+        self.line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+        self.line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=self.line, title='Chairs requisition', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        self.record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': 'Chairs for Bursary', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+        self.solicitation = prepare_solicitation(record=self.record, actor=self.preparer, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=self.solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=self.solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        self.solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        self.solicitation.advertisement.save(update_fields=['closing_date'])
+        self.bid = record_bid(
+            solicitation=self.solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000
+        )
+
+    def test_review_requires_bid_from_same_solicitation(self):
+        other_record = make_record(self.law_profile, self.preparer)
+        other_solicitation = Solicitation.objects.create(
+            record=other_record, prepared_by=self.preparer, **SOLICITATION_FIELDS
+        )
+        foreign_bid = Bid.objects.create(
+            solicitation=other_solicitation, vendor_name='Other Vendor', bid_amount=100_000, recorded_by=self.preparer,
+        )
+        with self.assertRaises(ValidationError):
+            record_tenders_board_review(
+                solicitation=self.solicitation, actor=self.preparer, recommended_bid=foreign_bid,
+                evaluation_summary='Lowest bid.',
+            )
+
+    def test_review_rejects_non_responsive_bid(self):
+        non_responsive_bid = record_bid(
+            solicitation=self.solicitation, actor=self.preparer, vendor_name='Beta Supplies',
+            bid_amount=490_000, is_responsive=False, note='Missing bid security.',
+        )
+        with self.assertRaises(ValidationError):
+            record_tenders_board_review(
+                solicitation=self.solicitation, actor=self.preparer, recommended_bid=non_responsive_bid,
+                evaluation_summary='Should not be recommendable.',
+            )
+
+    def test_review_requires_evaluation_summary(self):
+        with self.assertRaises(ValidationError):
+            record_tenders_board_review(
+                solicitation=self.solicitation, actor=self.preparer, recommended_bid=self.bid, evaluation_summary='',
+            )
+
+    def test_review_requires_quorum(self):
+        with self.assertRaises(ValidationError):
+            record_tenders_board_review(
+                solicitation=self.solicitation, actor=self.preparer, recommended_bid=self.bid,
+                evaluation_summary='Lowest bid.', quorum_present=False,
+            )
+
+    def test_review_twice_raises(self):
+        record_tenders_board_review(
+            solicitation=self.solicitation, actor=self.preparer, recommended_bid=self.bid,
+            evaluation_summary='Lowest bid.',
+        )
+        with self.assertRaises(ValidationError):
+            record_tenders_board_review(
+                solicitation=self.solicitation, actor=self.preparer, recommended_bid=self.bid,
+                evaluation_summary='Again.',
+            )
+
+    def test_award_blocked_without_tenders_board_review(self):
+        with self.assertRaises(ValidationError):
+            award_solicitation(
+                solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid,
+                decision_note='Lowest bid.',
+            )
+
+    def test_full_happy_path_review_then_award_and_public_disclosure(self):
+        record_tenders_board_review(
+            solicitation=self.solicitation, actor=self.preparer, recommended_bid=self.bid,
+            evaluation_summary='Acme is the lowest evaluated responsive bid.',
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='tendersboardreview', action=AuditEvent.Action.TENDERS_BOARD_REVIEWED,
+            ).exists()
+        )
+        award_solicitation(
+            solicitation=self.solicitation, actor=self.approver, winning_bid=self.bid, decision_note='Lowest bid.',
+        )
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, 'Acme is the lowest evaluated responsive bid.')
+
+
 class AwardTests(TestCase):
     """Bid recording & Award decision (blueprint Phase 3 — Approvals, first
     slice). Bids are a staff-recorded administrative log, not a submission
@@ -1149,6 +1276,7 @@ class AwardTests(TestCase):
         self.approver = User.objects.create_user(username='ao_award', password='x', role=User.Role.ACCOUNTING_OFFICER)
         self.requester = User.objects.create_user(username='ru_award', password='x', role=User.Role.REQUESTING_UNIT)
         self.finance = User.objects.create_user(username='fin_award', password='x', role=User.Role.FINANCE)
+        self.tenders_board = User.objects.create_user(username='tb_award', password='x', role=User.Role.TENDERS_BOARD)
         make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
 
         self.plan = ProcurementPlan.objects.create(
@@ -1207,6 +1335,11 @@ class AwardTests(TestCase):
 
     def test_award_requires_bid_from_same_solicitation(self):
         solicitation = self.publish_and_close()
+        own_bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=own_bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
         other_record = make_record(self.law_profile, self.preparer)
         other_solicitation = Solicitation.objects.create(
             record=other_record, prepared_by=self.preparer, **SOLICITATION_FIELDS
@@ -1222,18 +1355,28 @@ class AwardTests(TestCase):
 
     def test_award_rejects_non_responsive_bid(self):
         solicitation = self.publish_and_close()
-        bid = record_bid(
+        responsive_bid = record_bid(
+            solicitation=solicitation, actor=self.preparer, vendor_name='Beta Supplies', bid_amount=495_000,
+        )
+        non_responsive_bid = record_bid(
             solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
             bid_amount=480_000, is_responsive=False, note='Missing bid security.',
         )
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=responsive_bid,
+            evaluation_summary='Beta Supplies is the lowest responsive bid.',
+        )
         with self.assertRaises(ValidationError):
             award_solicitation(
-                solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.',
+                solicitation=solicitation, actor=self.approver, winning_bid=non_responsive_bid, decision_note='Lowest bid.',
             )
 
     def test_award_requires_decision_note(self):
         solicitation = self.publish_and_close()
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
         with self.assertRaises(ValidationError):
             award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='')
 
@@ -1248,6 +1391,9 @@ class AwardTests(TestCase):
 
         solicitation = self.publish_and_close()
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
         self.assertTrue(solicitation.bpp_prior_review_required)
         with self.assertRaises(ValidationError):
             award_solicitation(
@@ -1262,6 +1408,9 @@ class AwardTests(TestCase):
     def test_award_is_idempotent_guard(self):
         solicitation = self.publish_and_close()
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
         award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.')
         with self.assertRaises(ValidationError):
             award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Again.')
@@ -1274,6 +1423,10 @@ class AwardTests(TestCase):
         winning_bid = record_bid(
             solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd',
             vendor_registration_no='RC-123456', bid_amount=480_000,
+        )
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=winning_bid,
+            evaluation_summary='Acme Furniture Ltd is the lowest evaluated responsive bid.',
         )
         award_solicitation(
             solicitation=solicitation, actor=self.approver, winning_bid=winning_bid,
@@ -1341,6 +1494,9 @@ class AwardTests(TestCase):
     def test_award_decide_view_rejects_wrong_role(self):
         solicitation = self.publish_and_close()
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
         self.client.force_login(self.preparer)  # procurement_unit, not accounting_officer
         response = self.client.post(
             reverse('staff_award_decide', args=[solicitation.id]),
@@ -1351,6 +1507,9 @@ class AwardTests(TestCase):
     def test_award_decide_view_allows_accounting_officer(self):
         solicitation = self.publish_and_close()
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.tenders_board, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
         self.client.force_login(self.approver)
         response = self.client.post(
             reverse('staff_award_decide', args=[solicitation.id]),
@@ -1359,6 +1518,27 @@ class AwardTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.record.refresh_from_db()
         self.assertEqual(self.record.status, 'Awarded')
+
+    def test_tenders_board_review_view_rejects_wrong_role(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        self.client.force_login(self.preparer)  # procurement_unit, not tenders_board
+        response = self.client.post(
+            reverse('staff_tenders_board_review', args=[solicitation.id]),
+            {'recommended_bid': str(bid.id), 'evaluation_summary': 'Lowest bid.', 'quorum_present': 'on'},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_tenders_board_review_view_allows_tenders_board(self):
+        solicitation = self.publish_and_close()
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        self.client.force_login(self.tenders_board)
+        response = self.client.post(
+            reverse('staff_tenders_board_review', args=[solicitation.id]),
+            {'recommended_bid': str(bid.id), 'evaluation_summary': 'Lowest bid.', 'quorum_present': 'on'},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(TendersBoardReview.objects.filter(solicitation=solicitation).exists())
 
 
 class ComplaintTests(TestCase):
@@ -1529,6 +1709,10 @@ class ComplaintHoldTests(TestCase):
         self.bid = record_bid(
             solicitation=self.solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000
         )
+        record_tenders_board_review(
+            solicitation=self.solicitation, actor=self.preparer, recommended_bid=self.bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
 
     def file_complaint(self):
         return submit_complaint(
@@ -1653,6 +1837,10 @@ class ContractMilestoneTests(TestCase):
         solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
         solicitation.advertisement.save(update_fields=['closing_date'])
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.preparer, recommended_bid=bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
         self.award = award_solicitation(
             solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
         )
@@ -1822,6 +2010,10 @@ class ContractCompletionTests(TestCase):
         solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
         solicitation.advertisement.save(update_fields=['closing_date'])
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.preparer, recommended_bid=bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
         award = award_solicitation(
             solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
         )
@@ -1987,6 +2179,10 @@ class PerformanceGuaranteeTests(TestCase):
         solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
         solicitation.advertisement.save(update_fields=['closing_date'])
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.preparer, recommended_bid=bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
         award = award_solicitation(
             solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
         )
@@ -2140,6 +2336,10 @@ class InvoicePaymentTests(TestCase):
         solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
         solicitation.advertisement.save(update_fields=['closing_date'])
         bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.preparer, recommended_bid=bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
         award = award_solicitation(
             solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
         )
@@ -2425,6 +2625,15 @@ class SolicitationAdminLockdownTests(TestCase):
         all_fields = {f.name for f in Payment._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)
 
+    def test_tenders_board_review_admin_has_no_add_permission(self):
+        from .admin import TendersBoardReviewAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = TendersBoardReviewAdmin(TendersBoardReview, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in TendersBoardReview._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
 
 class AnalyticsTests(TestCase):
     """Reports & Risk Analytics (blueprint Phase 5) — pure read/aggregation,
@@ -2503,6 +2712,10 @@ class AnalyticsTests(TestCase):
         solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
         solicitation.advertisement.save(update_fields=['closing_date'])
         bid = record_bid(solicitation=solicitation, actor=self.staff, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.staff, recommended_bid=bid,
+            evaluation_summary='Lowest evaluated bid.',
+        )
         award = award_solicitation(
             solicitation=solicitation, actor=approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
         )
