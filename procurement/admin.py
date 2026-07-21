@@ -8,8 +8,10 @@ from .models import (
     Bid,
     Clarification,
     Complaint,
+    Contract,
     FinancialYear,
     LawProfile,
+    Milestone,
     PlanLine,
     PrequalificationApplicant,
     ProcessIdentifierSequence,
@@ -252,6 +254,37 @@ class ComplaintAdmin(admin.ModelAdmin):
     list_display = ('record', 'complainant_name', 'status', 'submitted_at', 'resolved_by')
     list_filter = ('status',)
     readonly_fields = [f.name for f in Complaint._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Contract)
+class ContractAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via services.sign_contract() —
+    no legitimate admin edit path."""
+
+    list_display = ('contract_reference', 'award', 'signed_date', 'signed_by')
+    readonly_fields = [f.name for f in Contract._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Milestone)
+class MilestoneAdmin(admin.ModelAdmin):
+    """Every field is service-written via services.add_milestone()/
+    complete_milestone() — no legitimate admin edit path."""
+
+    list_display = ('description', 'contract', 'due_date', 'status', 'completed_by')
+    list_filter = ('status',)
+    readonly_fields = [f.name for f in Milestone._meta.fields]
 
     def has_add_permission(self, request):
         return False

@@ -158,6 +158,34 @@
     {% endfor %}
   </ul>
 </div>
+
+{% if contract %}
+<div class="flag-box">
+  <h3>{{ ui.contract_heading }}</h3>
+  <div class="detail-grid">
+    <div class="field"><div class="label">Reference</div><div class="val">{{ contract.contract_reference }}</div></div>
+    <div class="field"><div class="label">Vendor signatory</div><div class="val">{{ contract.vendor_signatory_name }}</div></div>
+    <div class="field"><div class="label">Signed date</div><div class="val">{{ contract.signed_date }}</div></div>
+    <div class="field"><div class="label">Period</div><div class="val">{{ contract.start_date }} → {{ contract.end_date }}</div></div>
+  </div>
+</div>
+
+<div class="flag-box">
+  <h3>{{ ui.milestones_heading }}</h3>
+  <ul class="timeline">
+    {% for m in milestones %}
+    <li>
+      <div class="transition">{{ m.description }} — due {{ m.due_date }}
+        <span class="badge badge-{{ m.status }}">
+          {% if m.status == 'completed' %}{{ ui.milestone_completed }}{% else %}{{ ui.milestone_pending }}{% endif %}
+        </span>
+      </div>
+      {% if m.status == 'completed' %}<div class="note">{{ m.completion_note }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 {% endif %}
 {% endif %}
 

@@ -115,6 +115,10 @@ STRINGS = {
         'complaint_pending_note': 'complaint(s) under review.',
         'complaint_upheld': 'Upheld',
         'complaint_dismissed': 'Dismissed',
+        'contract_heading': 'Contract',
+        'milestones_heading': 'Delivery Milestones',
+        'milestone_pending': 'Pending',
+        'milestone_completed': 'Completed',
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -223,6 +227,10 @@ STRINGS = {
         'complaint_pending_note': 'complaint(s) dey under review.',
         'complaint_upheld': 'Dem Uphold Am',
         'complaint_dismissed': 'Dem Reject Am',
+        'contract_heading': 'Contract',
+        'milestones_heading': 'Delivery Milestones',
+        'milestone_pending': 'E Never Ready',
+        'milestone_completed': 'E Don Ready',
     },
 }
 

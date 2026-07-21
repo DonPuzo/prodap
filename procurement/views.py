@@ -19,10 +19,13 @@ from .forms import (
     ClarificationQuestionForm,
     ComplaintForm,
     ComplaintResolveForm,
+    ContractForm,
     FundsConfirmationForm,
     FundsDeclineForm,
     LocalizedAuthenticationForm,
     MethodDeterminationForm,
+    MilestoneCompleteForm,
+    MilestoneForm,
     PackagingReviewForm,
     PlanLineForm,
     PrequalificationApplicantForm,
@@ -37,16 +40,18 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Bid, Clarification, Complaint, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord,
-    RecordFlag, Requisition, Solicitation, User,
+    Award, Bid, Clarification, Complaint, Contract, Milestone, PlanLine, PrequalificationApplicant,
+    ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
 )
 from .permissions import role_required
 from .services import (
+    add_milestone,
     answer_clarification,
     approve_plan,
     approve_plan_line,
     approve_solicitation,
     award_solicitation,
+    complete_milestone,
     confirm_requisition_funds,
     create_record_from_requisition,
     decline_requisition_funds,
@@ -64,6 +69,7 @@ from .services import (
     resolve_complaint,
     review_prequalification_applicant,
     review_requisition_packaging,
+    sign_contract,
     submit_clarification_question,
     submit_complaint,
     submit_plan,
@@ -208,6 +214,11 @@ def public_record_detail(request, pk):
     all_complaints = record.complaints.all()
     complaints_resolved = [c for c in all_complaints if c.status != Complaint.Status.PENDING]
     complaints_pending_count = sum(1 for c in all_complaints if c.status == Complaint.Status.PENDING)
+    # Contract + milestones: public from signing — contract terms and a
+    # delivery timeline are core transparency info, not competitively
+    # sensitive the way bids/evaluation are.
+    contract = getattr(award, 'contract', None) if award else None
+    milestones = contract.milestones.all() if contract else []
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -222,6 +233,8 @@ def public_record_detail(request, pk):
         'bids': bids,
         'complaints_resolved': complaints_resolved,
         'complaints_pending_count': complaints_pending_count,
+        'contract': contract,
+        'milestones': milestones,
     })
 
 
@@ -663,6 +676,8 @@ def staff_solicitation_detail(request, pk):
     applicants = solicitation.prequalification_applicants.select_related('recorded_by', 'reviewed_by').all()
     bids = solicitation.bids.select_related('recorded_by').all()
     award = getattr(solicitation, 'award', None)
+    contract = getattr(award, 'contract', None) if award else None
+    milestones = contract.milestones.select_related('completed_by').all() if contract else []
     return render(request, 'staff/solicitation_detail.html', {
         'solicitation': solicitation, 'record': solicitation.record, 'advertisement': advertisement,
         'clarifications': clarifications, 'answer_form': ClarificationAnswerForm(),
@@ -670,6 +685,8 @@ def staff_solicitation_detail(request, pk):
         'review_form': PrequalificationReviewForm(),
         'bids': bids, 'award': award, 'bid_form': BidForm(),
         'award_form': AwardForm(solicitation=solicitation) if not award else None,
+        'contract': contract, 'contract_form': ContractForm(),
+        'milestones': milestones, 'milestone_form': MilestoneForm(), 'milestone_complete_form': MilestoneCompleteForm(),
     })
 
 
@@ -833,3 +850,56 @@ def staff_complaint_resolve(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message)
     return redirect('staff_record_detail', pk=complaint.record_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_contract_sign(request, pk):
+    award = get_object_or_404(Award, pk=pk)
+    if request.method == 'POST':
+        form = ContractForm(request.POST)
+        if form.is_valid():
+            try:
+                sign_contract(
+                    award=award, actor=request.user,
+                    contract_reference=form.cleaned_data['contract_reference'],
+                    vendor_signatory_name=form.cleaned_data['vendor_signatory_name'],
+                    signed_date=form.cleaned_data['signed_date'],
+                    start_date=form.cleaned_data['start_date'],
+                    end_date=form.cleaned_data['end_date'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+        else:
+            messages.error(request, 'Invalid contract submission — check the dates and required fields.')
+    return redirect('staff_solicitation_detail', pk=award.solicitation_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_milestone_add(request, pk):
+    contract = get_object_or_404(Contract, pk=pk)
+    if request.method == 'POST':
+        form = MilestoneForm(request.POST)
+        if form.is_valid():
+            try:
+                add_milestone(
+                    contract=contract, actor=request.user,
+                    description=form.cleaned_data['description'], due_date=form.cleaned_data['due_date'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=contract.award.solicitation_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_milestone_complete(request, pk):
+    milestone = get_object_or_404(Milestone, pk=pk)
+    if request.method == 'POST':
+        form = MilestoneCompleteForm(request.POST)
+        if form.is_valid():
+            try:
+                complete_milestone(
+                    milestone=milestone, actor=request.user, completion_note=form.cleaned_data['completion_note'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+    return redirect('staff_solicitation_detail', pk=milestone.contract.award.solicitation_id)

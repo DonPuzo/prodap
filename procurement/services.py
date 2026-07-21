@@ -13,6 +13,8 @@ from .models import (
     Bid,
     Clarification,
     Complaint,
+    Contract,
+    Milestone,
     PlanLine,
     PrequalificationApplicant,
     ProcessIdentifierSequence,
@@ -635,3 +637,62 @@ def resolve_complaint(*, complaint, actor, status, resolution_note):
             new_value={'status': status},
         )
     return complaint
+
+
+# --- Contract lifecycle (blueprint Phase 4), first slice: signing an
+# Award into a Contract, plus milestone tracking. sign_contract() is now
+# the only sanctioned way to reach Implementation status, same pattern as
+# publish_advertisement()/award_solicitation(). Invoices/payments/
+# variations and evidence-gating Implementation -> Completed remain
+# explicitly out of scope for this slice. ---
+
+
+def sign_contract(*, award, actor, contract_reference, start_date, end_date, vendor_signatory_name, signed_date):
+    record = award.solicitation.record
+    if record.status != ProcurementRecord.Status.AWARDED:
+        raise ValidationError(f'This record is {record.status} — a contract cannot be signed from this status.')
+    if hasattr(award, 'contract'):
+        raise ValidationError('This award already has a signed contract.')
+    if not contract_reference.strip():
+        raise ValidationError('A contract reference is required.')
+    if not vendor_signatory_name.strip():
+        raise ValidationError('The vendor signatory name is required.')
+    if end_date < start_date:
+        raise ValidationError({'end_date': 'End date must be on or after the start date.'})
+    with transaction.atomic():
+        contract = Contract.objects.create(
+            award=award, contract_reference=contract_reference.strip(), start_date=start_date, end_date=end_date,
+            vendor_signatory_name=vendor_signatory_name.strip(), signed_date=signed_date, signed_by=actor,
+        )
+        log_audit_event(target=contract, action=AuditEvent.Action.CONTRACT_SIGNED, actor=actor)
+        transition_status(
+            record=record, new_status=ProcurementRecord.Status.IMPLEMENTATION, updated_by=actor,
+            note=f'Contract {contract_reference} signed with {vendor_signatory_name}.',
+        )
+    return contract
+
+
+def add_milestone(*, contract, actor, description, due_date):
+    if not description.strip():
+        raise ValidationError('A milestone description is required.')
+    with transaction.atomic():
+        milestone = Milestone.objects.create(
+            contract=contract, description=description.strip(), due_date=due_date, created_by=actor,
+        )
+        log_audit_event(target=milestone, action=AuditEvent.Action.MILESTONE_ADDED, actor=actor)
+    return milestone
+
+
+def complete_milestone(*, milestone, actor, completion_note):
+    if milestone.status != Milestone.Status.PENDING:
+        raise ValidationError('This milestone is already completed.')
+    if not completion_note.strip():
+        raise ValidationError('A completion/inspection note is required.')
+    with transaction.atomic():
+        milestone.status = Milestone.Status.COMPLETED
+        milestone.completion_note = completion_note.strip()
+        milestone.completed_by = actor
+        milestone.completed_at = timezone.now()
+        milestone.save(update_fields=['status', 'completion_note', 'completed_by', 'completed_at'])
+        log_audit_event(target=milestone, action=AuditEvent.Action.MILESTONE_COMPLETED, actor=actor, reason=completion_note)
+    return milestone

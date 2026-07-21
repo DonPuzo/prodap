@@ -136,5 +136,51 @@
 {% else %}
 <p style="color: var(--muted);">Record at least one bid before an award can be decided.</p>
 {% endif %}
+
+{% if award %}
+<h3 style="margin-top: var(--space-4);">Contract</h3>
+{% if contract %}
+<div class="detail-grid">
+  <div class="field"><div class="label">Reference</div><div class="val">{{ contract.contract_reference }}</div></div>
+  <div class="field"><div class="label">Vendor signatory</div><div class="val">{{ contract.vendor_signatory_name }}</div></div>
+  <div class="field"><div class="label">Signed date</div><div class="val">{{ contract.signed_date }}</div></div>
+  <div class="field"><div class="label">Period</div><div class="val">{{ contract.start_date }} → {{ contract.end_date }}</div></div>
+</div>
+
+<h3 style="margin-top: var(--space-4);">Milestones</h3>
+{% for m in milestones %}
+<div class="form-card" style="margin-bottom: var(--space-3);">
+  <p><strong>{{ m.description }}</strong> — due {{ m.due_date }}
+    <span class="badge badge-{{ m.status }}">{{ m.get_status_display }}</span>
+  </p>
+  {% if m.status == 'completed' %}
+    <p>{{ m.completion_note }}</p>
+    <p style="color: var(--muted); font-size: .8em;">Completed by {{ m.completed_by.username }} on {{ m.completed_at|date:"Y-m-d" }}</p>
+  {% else %}
+    <form method="post" action="{% url 'staff_milestone_complete' m.id %}">
+      {% csrf_token %}
+      {{ milestone_complete_form.as_p }}
+      <button class="btn" type="submit">Mark complete</button>
+    </form>
+  {% endif %}
+</div>
+{% endfor %}
+<div class="form-card">
+  <form method="post" action="{% url 'staff_milestone_add' contract.id %}">
+    {% csrf_token %}
+    {{ milestone_form.as_p }}
+    <button class="btn" type="submit">Add milestone</button>
+  </form>
+</div>
+{% else %}
+<div class="form-card">
+  <form method="post" action="{% url 'staff_contract_sign' award.id %}">
+    {% csrf_token %}
+    {{ contract_form.as_p }}
+    <button class="btn" type="submit">Record signed contract</button>
+  </form>
+</div>
+{% endif %}
+{% endif %}
 {% endif %}
 {% endblock %}

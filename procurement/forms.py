@@ -98,6 +98,10 @@ class StatusTransitionForm(forms.Form):
             # Advertised/Tendering -> Awarded is now evidence-derived (see
             # services.award_solicitation) — Phase 3 slice, same mechanism.
             excluded.add(ProcurementRecord.Status.AWARDED)
+        if current_status == ProcurementRecord.Status.AWARDED:
+            # Awarded -> Implementation is now evidence-derived (see
+            # services.sign_contract) — Phase 4 slice, same mechanism.
+            excluded.add(ProcurementRecord.Status.IMPLEMENTATION)
         choices = [c for c in ProcurementRecord.Status.choices if c[0] not in excluded]
         self.fields['new_status'].choices = choices
 
@@ -325,4 +329,24 @@ class ComplaintResolveForm(forms.Form):
     resolution_note = forms.CharField(
         widget=forms.Textarea(attrs={'rows': 3}), required=True,
         help_text='Required — becomes the public response.',
+    )
+
+
+class ContractForm(forms.Form):
+    contract_reference = forms.CharField(max_length=100, required=True)
+    vendor_signatory_name = forms.CharField(max_length=255, required=True)
+    signed_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+    start_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+    end_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+
+
+class MilestoneForm(forms.Form):
+    description = forms.CharField(max_length=255, required=True)
+    due_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+
+
+class MilestoneCompleteForm(forms.Form):
+    completion_note = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3}), required=True,
+        help_text='Required — evidence of inspection/verification.',
     )

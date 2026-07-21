@@ -469,6 +469,9 @@ class AuditEvent(models.Model):
         BID_RECORDED = 'bid_recorded', 'Bid Recorded'
         AWARD_DECIDED = 'award_decided', 'Award Decided'
         COMPLAINT_RESOLVED = 'complaint_resolved', 'Complaint Resolved'
+        CONTRACT_SIGNED = 'contract_signed', 'Contract Signed'
+        MILESTONE_ADDED = 'milestone_added', 'Milestone Added'
+        MILESTONE_COMPLETED = 'milestone_completed', 'Milestone Completed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -823,3 +826,77 @@ class Complaint(models.Model):
 
     def __str__(self):
         return f'Complaint on {self.record.title} ({self.get_status_display()})'
+
+
+class Contract(models.Model):
+    """Formalizes an Award into a signed contract (blueprint Phase 4 —
+    Contract lifecycle). The only sanctioned way a ProcurementRecord
+    reaches Implementation status from Phase 4 onward (see
+    services.sign_contract). OneToOne on Award: one contract per award,
+    DB-enforced.
+
+    Deliberately does not store its own contract value — read live from
+    award.winning_bid.bid_amount (same "don't duplicate, read live"
+    principle already used by Solicitation.bpp_prior_review_required and
+    Award's own amount handling). A future increment could add a distinct
+    negotiated final value if institutions need one; not built now to
+    avoid a second, potentially-divergent source of truth without a
+    concrete need for it yet."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    award = models.OneToOneField(Award, on_delete=models.PROTECT, related_name='contract')
+    contract_reference = models.CharField(max_length=100, unique=True)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    vendor_signatory_name = models.CharField(max_length=255)
+    signed_date = models.DateField()
+    signed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='contracts_signed'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def clean(self):
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValidationError({'end_date': 'End date must be on or after the start date.'})
+
+    def __str__(self):
+        return f'Contract {self.contract_reference} ({self.award.solicitation.record.title})'
+
+
+class Milestone(models.Model):
+    """A delivery milestone against a signed Contract. Unlike Bid/
+    Clarification, milestones are public from creation, not hidden until
+    resolved — a delivery timeline isn't competitively sensitive the way
+    bid amounts or evaluation are, and visibility into whether a
+    contractor is on schedule is itself a transparency goal."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        COMPLETED = 'completed', 'Completed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(Contract, on_delete=models.PROTECT, related_name='milestones')
+    description = models.CharField(max_length=255)
+    due_date = models.DateField()
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    completion_note = models.TextField(
+        blank=True, help_text='Required when marking complete — evidence of inspection/verification.'
+    )
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='milestones_completed',
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='milestones_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['due_date']
+
+    def __str__(self):
+        return f'{self.description} ({self.get_status_display()})'
