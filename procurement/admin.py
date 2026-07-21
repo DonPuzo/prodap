@@ -13,6 +13,7 @@ from .models import (
     FinancialYear,
     LawProfile,
     Milestone,
+    PerformanceGuarantee,
     PlanLine,
     PrequalificationApplicant,
     ProcessIdentifierSequence,
@@ -286,6 +287,21 @@ class MilestoneAdmin(admin.ModelAdmin):
     list_display = ('description', 'contract', 'due_date', 'status', 'completed_by')
     list_filter = ('status',)
     readonly_fields = [f.name for f in Milestone._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PerformanceGuarantee)
+class PerformanceGuaranteeAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via
+    services.record_performance_guarantee() — no legitimate admin edit path."""
+
+    list_display = ('contract', 'guarantee_type', 'amount', 'expiry_date', 'verified_by')
+    readonly_fields = [f.name for f in PerformanceGuarantee._meta.fields]
 
     def has_add_permission(self, request):
         return False

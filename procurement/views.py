@@ -28,6 +28,7 @@ from .forms import (
     MilestoneCompleteForm,
     MilestoneForm,
     PackagingReviewForm,
+    PerformanceGuaranteeForm,
     PlanLineForm,
     PrequalificationApplicantForm,
     PrequalificationReviewForm,
@@ -41,8 +42,8 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Award, Bid, Clarification, Complaint, Contract, Milestone, PlanLine, PrequalificationApplicant,
-    ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
+    Award, Bid, Clarification, Complaint, Contract, Milestone, PerformanceGuarantee, PlanLine,
+    PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag, Requisition, Solicitation, User,
 )
 from .permissions import role_required
 from .services import (
@@ -64,6 +65,7 @@ from .services import (
     prepare_solicitation,
     publish_advertisement,
     record_bid,
+    record_performance_guarantee,
     record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
@@ -222,6 +224,10 @@ def public_record_detail(request, pk):
     contract = getattr(award, 'contract', None) if award else None
     milestones = contract.milestones.all() if contract else []
     completion = getattr(contract, 'completion', None) if contract else None
+    # Public disclosure keeps type/amount/expiry (same level as the
+    # already-public Solicitation.bid_security_* fields) but not the
+    # issuing institution or reference number — see the model docstring.
+    guarantee = getattr(contract, 'performance_guarantee', None) if contract else None
     return render(request, 'public/detail.html', {
         'record': record,
         'history': history,
@@ -238,6 +244,7 @@ def public_record_detail(request, pk):
         'complaints_pending_count': complaints_pending_count,
         'contract': contract,
         'milestones': milestones,
+        'guarantee': guarantee,
         'completion': completion,
     })
 
@@ -687,6 +694,7 @@ def staff_solicitation_detail(request, pk):
     contract = getattr(award, 'contract', None) if award else None
     milestones = contract.milestones.select_related('completed_by').all() if contract else []
     completion = getattr(contract, 'completion', None) if contract else None
+    guarantee = getattr(contract, 'performance_guarantee', None) if contract else None
     # Informational only — the service is the real gate. A contract with
     # zero milestones is not blocked from completion.
     pending_milestones_count = (
@@ -701,6 +709,7 @@ def staff_solicitation_detail(request, pk):
         'award_form': AwardForm(solicitation=solicitation) if not award else None,
         'contract': contract, 'contract_form': ContractForm(),
         'milestones': milestones, 'milestone_form': MilestoneForm(), 'milestone_complete_form': MilestoneCompleteForm(),
+        'guarantee': guarantee, 'guarantee_form': PerformanceGuaranteeForm(),
         'completion': completion, 'completion_form': ContractCompletionForm(),
         'pending_milestones_count': pending_milestones_count,
     })
@@ -888,6 +897,28 @@ def staff_contract_sign(request, pk):
         else:
             messages.error(request, 'Invalid contract submission — check the dates and required fields.')
     return redirect('staff_solicitation_detail', pk=award.solicitation_id)
+
+
+@role_required(User.Role.PROCUREMENT_UNIT)
+def staff_performance_guarantee_add(request, pk):
+    contract = get_object_or_404(Contract, pk=pk)
+    if request.method == 'POST':
+        form = PerformanceGuaranteeForm(request.POST)
+        if form.is_valid():
+            try:
+                record_performance_guarantee(
+                    contract=contract, actor=request.user,
+                    guarantee_type=form.cleaned_data['guarantee_type'],
+                    issuing_institution=form.cleaned_data['issuing_institution'],
+                    reference_number=form.cleaned_data['reference_number'],
+                    amount=form.cleaned_data['amount'],
+                    expiry_date=form.cleaned_data['expiry_date'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+        else:
+            messages.error(request, 'Invalid guarantee submission — check the required fields.')
+    return redirect('staff_solicitation_detail', pk=contract.award.solicitation_id)
 
 
 @role_required(User.Role.PROCUREMENT_UNIT)

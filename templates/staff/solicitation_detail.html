@@ -173,6 +173,28 @@
   </form>
 </div>
 
+<h3 style="margin-top: var(--space-4);">Performance Guarantee</h3>
+{% if guarantee %}
+<div class="detail-grid">
+  <div class="field"><div class="label">Type</div><div class="val">{{ guarantee.guarantee_type }}</div></div>
+  <div class="field"><div class="label">Issuing institution</div><div class="val">{{ guarantee.issuing_institution }}</div></div>
+  <div class="field"><div class="label">Reference</div><div class="val">{{ guarantee.reference_number }}</div></div>
+  <div class="field"><div class="label">Amount</div><div class="val">₦{{ guarantee.amount|floatformat:0 }}</div></div>
+  <div class="field"><div class="label">Expiry</div><div class="val">{{ guarantee.expiry_date }}</div></div>
+</div>
+{% else %}
+<div class="form-card">
+  {% if solicitation.bid_security_required %}
+  <p class="message">Bid security was required for this tender — a performance guarantee must be recorded before final acceptance.</p>
+  {% endif %}
+  <form method="post" action="{% url 'staff_performance_guarantee_add' contract.id %}">
+    {% csrf_token %}
+    {{ guarantee_form.as_p }}
+    <button class="btn" type="submit">Record performance guarantee</button>
+  </form>
+</div>
+{% endif %}
+
 <h3 style="margin-top: var(--space-4);">Final Acceptance</h3>
 {% if completion %}
 <div class="detail-grid">
@@ -184,6 +206,9 @@
 <div class="form-card">
   {% if pending_milestones_count %}
   <p class="message">{{ pending_milestones_count }} milestone(s) still pending — all must be completed before final acceptance can be recorded.</p>
+  {% endif %}
+  {% if solicitation.bid_security_required and not guarantee %}
+  <p class="message">A performance guarantee is required before final acceptance can be recorded.</p>
   {% endif %}
   <form method="post" action="{% url 'staff_contract_complete' contract.id %}">
     {% csrf_token %}

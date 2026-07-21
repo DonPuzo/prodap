@@ -16,6 +16,7 @@ from .models import (
     Contract,
     ContractCompletion,
     Milestone,
+    PerformanceGuarantee,
     PlanLine,
     PrequalificationApplicant,
     ProcessIdentifierSequence,
@@ -716,12 +717,33 @@ def complete_milestone(*, milestone, actor, completion_note):
     return milestone
 
 
+def record_performance_guarantee(
+    *, contract, actor, guarantee_type, issuing_institution, reference_number, amount, expiry_date,
+):
+    if hasattr(contract, 'performance_guarantee'):
+        raise ValidationError('This contract already has a performance guarantee on file.')
+    if not guarantee_type.strip() or not issuing_institution.strip() or not reference_number.strip():
+        raise ValidationError('Guarantee type, issuing institution, and reference number are all required.')
+    if not amount or amount <= 0:
+        raise ValidationError('A positive guarantee amount is required.')
+    with transaction.atomic():
+        guarantee = PerformanceGuarantee.objects.create(
+            contract=contract, guarantee_type=guarantee_type.strip(),
+            issuing_institution=issuing_institution.strip(), reference_number=reference_number.strip(),
+            amount=amount, expiry_date=expiry_date, verified_by=actor,
+        )
+        log_audit_event(target=guarantee, action=AuditEvent.Action.PERFORMANCE_GUARANTEE_RECORDED, actor=actor)
+    return guarantee
+
+
 def complete_contract(*, contract, actor, completion_date, inspection_note):
     """Final acceptance sign-off — the only sanctioned way a
     ProcurementRecord reaches Completed status. Closes the loop opened by
     sign_contract()/add_milestone(): every milestone (if any exist) must
     already be completed before the contract itself can be marked
-    complete."""
+    complete. Also requires a PerformanceGuarantee on file whenever the
+    underlying solicitation required bid security — see
+    PerformanceGuarantee's docstring for why that's the trigger used."""
     record = contract.award.solicitation.record
     _require_no_pending_complaint(record)
     if record.status != ProcurementRecord.Status.IMPLEMENTATION:
@@ -730,6 +752,10 @@ def complete_contract(*, contract, actor, completion_date, inspection_note):
         raise ValidationError('This contract has already been marked complete.')
     if contract.milestones.exclude(status=Milestone.Status.COMPLETED).exists():
         raise ValidationError('All milestones must be completed before the contract can be marked complete.')
+    if contract.award.solicitation.bid_security_required and not hasattr(contract, 'performance_guarantee'):
+        raise ValidationError(
+            'A performance guarantee is required before completion — bid security was required for this tender.'
+        )
     if not inspection_note.strip():
         raise ValidationError('A final inspection/acceptance note is required.')
     with transaction.atomic():

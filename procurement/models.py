@@ -473,6 +473,7 @@ class AuditEvent(models.Model):
         MILESTONE_ADDED = 'milestone_added', 'Milestone Added'
         MILESTONE_COMPLETED = 'milestone_completed', 'Milestone Completed'
         CONTRACT_COMPLETED = 'contract_completed', 'Contract Completed'
+        PERFORMANCE_GUARANTEE_RECORDED = 'performance_guarantee_recorded', 'Performance Guarantee Recorded'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -901,6 +902,35 @@ class Milestone(models.Model):
 
     def __str__(self):
         return f'{self.description} ({self.get_status_display()})'
+
+
+class PerformanceGuarantee(models.Model):
+    """Post-award performance security (blueprint Phase 4 — "guarantees").
+    Distinct from Solicitation.bid_security_* (submitted WITH a bid, to
+    guarantee bid seriousness): this is the security the winning vendor
+    posts after contract signing, to guarantee contract performance.
+
+    Conditionally required, not unconditionally: services.complete_contract()
+    refuses to proceed without one when the underlying Solicitation had
+    bid_security_required=True — the same "if bid security mattered here,
+    performance security matters too" logic real procurement practice
+    follows, since (unlike BPP No-Objection) there is no ThresholdRule-style
+    statutory table this specific gate could consult instead."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.OneToOneField(Contract, on_delete=models.PROTECT, related_name='performance_guarantee')
+    guarantee_type = models.CharField(max_length=100, help_text='e.g. Bank guarantee, insurance bond, cash deposit.')
+    issuing_institution = models.CharField(max_length=255, help_text='Staff-only — see public disclosure notes.')
+    reference_number = models.CharField(max_length=100, help_text='Staff-only — see public disclosure notes.')
+    amount = models.DecimalField(max_digits=16, decimal_places=2)
+    expiry_date = models.DateField()
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='performance_guarantees_verified'
+    )
+    verified_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.guarantee_type} for {self.contract.contract_reference}'
 
 
 class ContractCompletion(models.Model):

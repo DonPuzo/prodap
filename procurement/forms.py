@@ -357,6 +357,14 @@ class MilestoneCompleteForm(forms.Form):
     )
 
 
+class PerformanceGuaranteeForm(forms.Form):
+    guarantee_type = forms.CharField(max_length=100, required=True, help_text='e.g. Bank guarantee, insurance bond.')
+    issuing_institution = forms.CharField(max_length=255, required=True)
+    reference_number = forms.CharField(max_length=100, required=True)
+    amount = forms.DecimalField(max_digits=16, decimal_places=2, required=True, min_value=0.01)
+    expiry_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
+
+
 class ContractCompletionForm(forms.Form):
     completion_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
     inspection_note = forms.CharField(

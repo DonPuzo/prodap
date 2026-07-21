@@ -16,6 +16,7 @@ from .models import (
     ContractCompletion,
     FinancialYear,
     Milestone,
+    PerformanceGuarantee,
     PlanLine,
     PrequalificationApplicant,
     ProcurementPlan,
@@ -47,6 +48,7 @@ from .services import (
     prepare_solicitation,
     publish_advertisement,
     record_bid,
+    record_performance_guarantee,
     record_prequalification_applicant,
     reject_plan,
     reject_plan_line,
@@ -1918,6 +1920,169 @@ class ContractCompletionTests(TestCase):
         })
         self.assertEqual(response.status_code, 302)
         self.assertTrue(ContractCompletion.objects.filter(contract=self.contract).exists())
+
+
+class PerformanceGuaranteeTests(TestCase):
+    """Post-award performance security (blueprint step 17 — "verified
+    conditional securities"). Conditionally required: complete_contract()
+    only demands one when the underlying Solicitation had
+    bid_security_required=True — see PerformanceGuarantee's docstring."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.preparer = User.objects.create_user(username='pu_guar', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_guar', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_guar', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_guar', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.preparer, max_value=5_000_000, authority='Accounting Officer')
+
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.preparer
+        )
+
+    def _walk_to_signed_contract(self, bid_security_required, suffix):
+        line = PlanLine.objects.create(
+            plan=self.plan, department='Bursary', item_description=f'Chairs {suffix}', justification='need',
+            estimated_cost=500_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+            is_amendment=self.plan.status == ProcurementPlan.Status.APPROVED,
+        )
+        if self.plan.status != ProcurementPlan.Status.APPROVED:
+            approve_plan(plan=self.plan, actor=self.approver)
+        else:
+            approve_plan_line(plan_line=line, actor=self.approver)
+        line.refresh_from_db()
+
+        req = Requisition.objects.create(
+            plan_line=line, title=f'Chairs requisition {suffix}', department='Bursary',
+            requested_value=500_000, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.preparer, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.preparer)
+        record = create_record_from_requisition(requisition=req, actor=self.preparer, record_fields={
+            'title': f'Chairs for Bursary {suffix}', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+
+        fields = dict(SOLICITATION_FIELDS)
+        fields['bid_security_required'] = bid_security_required
+        if bid_security_required:
+            fields['bid_security_type'] = 'Bank Guarantee'
+            fields['bid_security_amount'] = 50_000
+        solicitation = prepare_solicitation(record=record, actor=self.preparer, fields=fields)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.preparer, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        bid = record_bid(solicitation=solicitation, actor=self.preparer, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        award = award_solicitation(
+            solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest evaluated bid.',
+        )
+        return sign_contract(
+            award=award, actor=self.preparer, contract_reference=f'CT-GUAR-{suffix}',
+            vendor_signatory_name='Acme Managing Director', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+
+    def test_record_guarantee_requires_all_fields(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='A')
+        with self.assertRaises(ValidationError):
+            record_performance_guarantee(
+                contract=contract, actor=self.preparer, guarantee_type='', issuing_institution='First Bank',
+                reference_number='REF1', amount=50_000, expiry_date=datetime.date.today() + datetime.timedelta(days=365),
+            )
+
+    def test_record_guarantee_requires_positive_amount(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='B')
+        with self.assertRaises(ValidationError):
+            record_performance_guarantee(
+                contract=contract, actor=self.preparer, guarantee_type='Bank Guarantee',
+                issuing_institution='First Bank', reference_number='REF1', amount=0,
+                expiry_date=datetime.date.today() + datetime.timedelta(days=365),
+            )
+
+    def test_record_guarantee_twice_raises(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='C')
+        record_performance_guarantee(
+            contract=contract, actor=self.preparer, guarantee_type='Bank Guarantee',
+            issuing_institution='First Bank', reference_number='REF1', amount=50_000,
+            expiry_date=datetime.date.today() + datetime.timedelta(days=365),
+        )
+        with self.assertRaises(ValidationError):
+            record_performance_guarantee(
+                contract=contract, actor=self.preparer, guarantee_type='Insurance Bond',
+                issuing_institution='Second Insurer', reference_number='REF2', amount=60_000,
+                expiry_date=datetime.date.today() + datetime.timedelta(days=365),
+            )
+
+    def test_completion_blocked_without_guarantee_when_bid_security_was_required(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='D')
+        with self.assertRaises(ValidationError):
+            complete_contract(
+                contract=contract, actor=self.approver, completion_date=datetime.date.today(),
+                inspection_note='Done.',
+            )
+
+    def test_completion_allowed_without_guarantee_when_bid_security_not_required(self):
+        contract = self._walk_to_signed_contract(bid_security_required=False, suffix='E')
+        completion = complete_contract(
+            contract=contract, actor=self.approver, completion_date=datetime.date.today(),
+            inspection_note='No bid security was required for this tender; delivery confirmed.',
+        )
+        self.assertIsNotNone(completion.pk)
+
+    def test_full_happy_path_completion_succeeds_once_guarantee_recorded(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='F')
+        record_performance_guarantee(
+            contract=contract, actor=self.preparer, guarantee_type='Bank Guarantee',
+            issuing_institution='First Bank of Nigeria', reference_number='PG-2026-001', amount=50_000,
+            expiry_date=datetime.date.today() + datetime.timedelta(days=365),
+        )
+        completion = complete_contract(
+            contract=contract, actor=self.approver, completion_date=datetime.date.today(),
+            inspection_note='Guarantee on file; delivery confirmed.',
+        )
+        self.assertIsNotNone(completion.pk)
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='performanceguarantee',
+                action=AuditEvent.Action.PERFORMANCE_GUARANTEE_RECORDED,
+            ).exists()
+        )
+
+        response = self.client.get(reverse('public_record_detail', args=[contract.award.solicitation.record_id]))
+        self.assertContains(response, 'Bank Guarantee')
+        self.assertContains(response, '50,000')
+        # Issuing institution and reference number stay staff-only.
+        self.assertNotContains(response, 'First Bank of Nigeria')
+        self.assertNotContains(response, 'PG-2026-001')
+
+    def test_guarantee_add_view_rejects_wrong_role(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='G')
+        self.client.force_login(self.approver)  # accounting_officer, not procurement_unit
+        response = self.client.post(reverse('staff_performance_guarantee_add', args=[contract.id]), {
+            'guarantee_type': 'Bank Guarantee', 'issuing_institution': 'First Bank',
+            'reference_number': 'REF1', 'amount': '50000', 'expiry_date': datetime.date.today() + datetime.timedelta(days=365),
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_guarantee_add_view_allows_procurement_unit(self):
+        contract = self._walk_to_signed_contract(bid_security_required=True, suffix='H')
+        self.client.force_login(self.preparer)
+        response = self.client.post(reverse('staff_performance_guarantee_add', args=[contract.id]), {
+            'guarantee_type': 'Bank Guarantee', 'issuing_institution': 'First Bank',
+            'reference_number': 'REF1', 'amount': '50000', 'expiry_date': datetime.date.today() + datetime.timedelta(days=365),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(PerformanceGuarantee.objects.filter(contract=contract).exists())
 
 
 class SolicitationViewRoleGateTests(TestCase):

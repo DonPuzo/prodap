@@ -186,6 +186,17 @@
   </ul>
 </div>
 
+{% if guarantee %}
+<div class="flag-box">
+  <h3>{{ ui.guarantee_heading }}</h3>
+  <div class="detail-grid">
+    <div class="field"><div class="label">Type</div><div class="val">{{ guarantee.guarantee_type }}</div></div>
+    <div class="field"><div class="label">Amount</div><div class="val">₦{{ guarantee.amount|floatformat:0|intcomma }}</div></div>
+    <div class="field"><div class="label">Expiry</div><div class="val">{{ guarantee.expiry_date }}</div></div>
+  </div>
+</div>
+{% endif %}
+
 {% if completion %}
 <div class="flag-box">
   <h3>{{ ui.completion_heading }}</h3>

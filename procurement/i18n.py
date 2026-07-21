@@ -119,6 +119,7 @@ STRINGS = {
         'milestones_heading': 'Delivery Milestones',
         'milestone_pending': 'Pending',
         'milestone_completed': 'Completed',
+        'guarantee_heading': 'Performance Guarantee',
         'completion_heading': 'Final Acceptance',
     },
     'pcm': {
@@ -232,6 +233,7 @@ STRINGS = {
         'milestones_heading': 'Delivery Milestones',
         'milestone_pending': 'E Never Ready',
         'milestone_completed': 'E Don Ready',
+        'guarantee_heading': 'Performance Guarantee',
         'completion_heading': 'Final Acceptance',
     },
 }

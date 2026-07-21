@@ -93,4 +93,8 @@ urlpatterns = [
         'staff/contracts/<uuid:pk>/complete/',
         views.staff_contract_complete, name='staff_contract_complete',
     ),
+    path(
+        'staff/contracts/<uuid:pk>/guarantee/add/',
+        views.staff_performance_guarantee_add, name='staff_performance_guarantee_add',
+    ),
 ]
