@@ -69,6 +69,7 @@ from .services import (
     find_similar_requisitions,
     get_current_solicitation,
     get_published_advertisement,
+    get_risk_alerts,
     prepare_solicitation,
     publish_advertisement,
     record_bid,
@@ -1173,4 +1174,5 @@ def staff_analytics(request):
         'total_invoiced': total_invoiced,
         'avg_cycle_days': avg_cycle_days,
         'completed_count': len(cycle_days),
+        'risk_alerts': get_risk_alerts(),
     })

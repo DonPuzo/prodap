@@ -897,3 +897,76 @@ def abandon_record(*, record, actor, reason, justification):
             note=f'Abandoned ({abandonment.get_reason_display()}): {justification.strip()}',
         )
     return abandonment
+
+
+# --- Automated risk alerts (blueprint Phase 5) — surfaces existing
+# rule-based signals as concrete, actionable lists rather than just the
+# aggregate counts staff_analytics already showed (see
+# ProcurementRecord.is_cost_outlier/cost_outlier_ratio and
+# Complaint.is_overdue). Deliberately simple, explainable thresholds, not
+# statistical/ML — same "simple and explainable" posture as
+# cost_outlier_ratio's own docstring. Staff-only, not surfaced publicly:
+# attaching an algorithmic "risk" label to a specific vendor/project
+# without human review carries the same reputational-risk concern already
+# documented on Complaint's own disclosure rules (raw allegations never
+# go public even once resolved) — read-only aggregation, no writes, no
+# audit event, same posture as the rest of staff_analytics. ---
+
+CYCLE_OUTLIER_THRESHOLD = 1.5  # 50% longer than the median completed-contract cycle time
+VENDOR_REPEAT_COMPLAINT_THRESHOLD = 2  # 2+ complaints (any status) across a vendor's records
+
+
+def _cycle_time_outliers():
+    entries = []
+    for completion in ContractCompletion.objects.select_related('contract__award__solicitation__record'):
+        record = completion.contract.award.solicitation.record
+        days = (completion.completed_at.date() - record.created_at.date()).days
+        entries.append((record, days))
+    if len(entries) < 3:
+        return []
+    all_days = sorted(days for _, days in entries)
+    mid = len(all_days) // 2
+    median = all_days[mid] if len(all_days) % 2 else (all_days[mid - 1] + all_days[mid]) / 2
+    if not median:
+        return []
+    outliers = [
+        {'record': record, 'days': days, 'ratio': days / median}
+        for record, days in entries
+        if days / median >= CYCLE_OUTLIER_THRESHOLD
+    ]
+    return sorted(outliers, key=lambda o: -o['ratio'])
+
+
+def _vendor_repeat_complaints():
+    counts = (
+        Complaint.objects.exclude(record__vendor_name='').exclude(record__vendor_name__isnull=True)
+        .values('record__vendor_name')
+        .annotate(count=django_models.Count('id'))
+        .filter(count__gte=VENDOR_REPEAT_COMPLAINT_THRESHOLD)
+        .order_by('-count')
+    )
+    results = []
+    for row in counts:
+        vendor = row['record__vendor_name']
+        records = list(ProcurementRecord.objects.filter(vendor_name=vendor, complaints__isnull=False).distinct())
+        results.append({'vendor_name': vendor, 'count': row['count'], 'records': records})
+    return results
+
+
+def get_risk_alerts():
+    cost_outliers = [
+        {'record': record, 'ratio': record.cost_outlier_ratio()}
+        for record in ProcurementRecord.objects.filter(awarded_cost__isnull=False)
+        if record.is_cost_outlier()
+    ]
+    cost_outliers.sort(key=lambda o: -o['ratio'])
+    overdue_complaints = [
+        c for c in Complaint.objects.select_related('record').filter(status=Complaint.Status.PENDING)
+        if c.is_overdue
+    ]
+    return {
+        'cost_outliers': cost_outliers,
+        'cycle_outliers': _cycle_time_outliers(),
+        'vendor_repeat_complaints': _vendor_repeat_complaints(),
+        'overdue_complaints': overdue_complaints,
+    }

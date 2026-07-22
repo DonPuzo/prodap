@@ -51,6 +51,7 @@ from .services import (
     determine_requisition_method,
     get_approving_authority,
     get_current_solicitation,
+    get_risk_alerts,
     prepare_solicitation,
     publish_advertisement,
     record_bid,
@@ -2892,3 +2893,159 @@ class AnalyticsTests(TestCase):
         # wrongly render the "no data" dash instead of "0".
         self.assertContains(response, '<div class="value">0</div>')
         self.assertNotContains(response, '<div class="value">—</div>')
+
+
+class RiskAlertTests(TestCase):
+    """Automated risk alerts (blueprint Phase 5) — surfaces existing
+    rule-based signals (ProcurementRecord.is_cost_outlier, a new
+    cycle-time equivalent, and Complaint.is_overdue) as concrete lists
+    rather than just the aggregate counts staff_analytics already showed.
+    Staff-only — see get_risk_alerts' docstring for why this isn't public."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.staff = User.objects.create_user(username='pu_risk', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_risk', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_risk', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_risk', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.staff, max_value=50_000_000, authority='Accounting Officer')
+        # One shared, pre-approved plan reused across every record this test
+        # builds — ProcurementPlan is unique_together on (law_profile,
+        # financial_year), so each test can only create one. New lines
+        # added after approval are approved individually via
+        # approve_plan_line (see approve_plan's own "amendment" handling).
+        self.plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.staff,
+        )
+        approve_plan(plan=self.plan, actor=self.approver)
+
+    def _build_awarded_record(self, *, awarded_cost, suffix, department='Bursary',
+                               method='Open Competitive Bidding', vendor_name='Acme Furniture Ltd'):
+        line = PlanLine.objects.create(
+            plan=self.plan, department=department, item_description=f'Item {suffix}', justification='need',
+            estimated_cost=awarded_cost, budget_line=f'B-{suffix}', proposed_quarter='Q1',
+            proposed_by=self.requester, is_amendment=True,
+        )
+        approve_plan_line(plan_line=line, actor=self.approver)
+        req = Requisition.objects.create(
+            plan_line=line, title=f'Requisition {suffix}', department=department,
+            requested_value=awarded_cost, budget_source=ProcurementRecord.BudgetSource.IGR,
+            requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.staff, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.staff)
+        record = create_record_from_requisition(requisition=req, actor=self.staff, record_fields={
+            'title': f'Record {suffix}', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+        record.procurement_method = method
+        record.save(update_fields=['procurement_method'])
+        solicitation = prepare_solicitation(record=record, actor=self.staff, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.staff, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        bid = record_bid(solicitation=solicitation, actor=self.staff, vendor_name=vendor_name, bid_amount=awarded_cost)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.staff, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
+        award_solicitation(solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.')
+        record.refresh_from_db()
+        return record
+
+    def _build_completed_record(self, *, awarded_cost, cycle_days, suffix, department='Bursary',
+                                 method='Open Competitive Bidding', vendor_name='Acme Furniture Ltd'):
+        record = self._build_awarded_record(
+            awarded_cost=awarded_cost, suffix=suffix, department=department, method=method,
+            vendor_name=vendor_name,
+        )
+        contract = sign_contract(
+            award=record.solicitations.get().award, actor=self.staff, contract_reference=f'CT-RISK-{suffix}',
+            vendor_signatory_name='Vendor MD', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+        completion = complete_contract(
+            contract=contract, actor=self.approver, completion_date=datetime.date.today(),
+            inspection_note='Delivery confirmed.',
+        )
+        start = timezone.now() - datetime.timedelta(days=cycle_days)
+        ProcurementRecord.objects.filter(pk=record.pk).update(created_at=start)
+        record.refresh_from_db()
+        return record
+
+    def test_cost_outlier_surfaced_in_risk_alerts(self):
+        for i in range(3):
+            self._build_awarded_record(awarded_cost=100_000, suffix=f'norm{i}')
+        outlier = self._build_awarded_record(awarded_cost=250_000, suffix='outlier')
+        alerts = get_risk_alerts()
+        flagged_ids = [o['record'].id for o in alerts['cost_outliers']]
+        self.assertIn(outlier.id, flagged_ids)
+
+    def test_cost_outlier_not_flagged_when_within_normal_range(self):
+        for i in range(4):
+            self._build_awarded_record(awarded_cost=100_000, suffix=f'norm{i}')
+        alerts = get_risk_alerts()
+        self.assertEqual(alerts['cost_outliers'], [])
+
+    def test_cycle_time_outlier_surfaced_in_risk_alerts(self):
+        for i in range(3):
+            self._build_completed_record(awarded_cost=100_000, cycle_days=10, suffix=f'fast{i}')
+        slow = self._build_completed_record(awarded_cost=100_000, cycle_days=60, suffix='slow')
+        alerts = get_risk_alerts()
+        flagged_ids = [o['record'].id for o in alerts['cycle_outliers']]
+        self.assertIn(slow.id, flagged_ids)
+
+    def test_vendor_repeat_complaints_surfaced(self):
+        record1 = self._build_awarded_record(awarded_cost=100_000, suffix='v1', vendor_name='Repeat Vendor Ltd')
+        record2 = self._build_awarded_record(awarded_cost=100_000, suffix='v2', vendor_name='Repeat Vendor Ltd')
+        submit_complaint(
+            record=record1, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concern one.',
+        )
+        submit_complaint(
+            record=record2, complainant_name='John Doe', complainant_contact='john@example.com',
+            description='Concern two.',
+        )
+        alerts = get_risk_alerts()
+        vendors = {v['vendor_name']: v['count'] for v in alerts['vendor_repeat_complaints']}
+        self.assertEqual(vendors.get('Repeat Vendor Ltd'), 2)
+
+    def test_single_complaint_vendor_not_flagged_as_repeat(self):
+        record = self._build_awarded_record(awarded_cost=100_000, suffix='single', vendor_name='One-Off Vendor Ltd')
+        submit_complaint(
+            record=record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concern.',
+        )
+        alerts = get_risk_alerts()
+        vendors = {v['vendor_name'] for v in alerts['vendor_repeat_complaints']}
+        self.assertNotIn('One-Off Vendor Ltd', vendors)
+
+    def test_overdue_complaint_surfaced(self):
+        record = make_record(self.law_profile, self.staff)
+        complaint = submit_complaint(
+            record=record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Filed long ago.',
+        )
+        days = self.law_profile.default_complaint_response_days
+        stale = timezone.now() - datetime.timedelta(days=days + 1)
+        Complaint.objects.filter(pk=complaint.pk).update(submitted_at=stale)
+        alerts = get_risk_alerts()
+        flagged_ids = [c.id for c in alerts['overdue_complaints']]
+        self.assertIn(complaint.id, flagged_ids)
+
+    def test_risk_alerts_section_renders_on_analytics_page(self):
+        for i in range(3):
+            self._build_awarded_record(awarded_cost=100_000, suffix=f'norm{i}')
+        outlier = self._build_awarded_record(awarded_cost=250_000, suffix='outlier2')
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_analytics'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Cost Outliers')
+        self.assertContains(response, outlier.title)

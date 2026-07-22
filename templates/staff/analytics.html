@@ -22,7 +22,87 @@
   </div>
 </div>
 
-<h3>Records by Status</h3>
+<h3 style="margin-top: var(--space-5);">Risk Alerts</h3>
+<p style="color: var(--muted); font-size: .9em;">
+  Simple, rule-based signals for staff attention — not proof of wrongdoing. Thresholds are
+  deliberately explainable (e.g. cost 25%+ above the department+method median), not statistical/ML.
+</p>
+
+{% if risk_alerts.cost_outliers or risk_alerts.cycle_outliers or risk_alerts.vendor_repeat_complaints or risk_alerts.overdue_complaints %}
+
+{% if risk_alerts.cost_outliers %}
+<h4>Cost Outliers</h4>
+<table class="record-list">
+  <thead><tr><th>Record</th><th>Department</th><th>Method</th><th>Cost</th><th>Ratio vs Median</th></tr></thead>
+  <tbody>
+    {% for o in risk_alerts.cost_outliers %}
+    <tr>
+      <td data-label="Record"><a href="{% url 'staff_record_detail' o.record.id %}">{{ o.record.title }}</a></td>
+      <td data-label="Department">{{ o.record.department }}</td>
+      <td data-label="Method">{{ o.record.procurement_method }}</td>
+      <td data-label="Cost">₦{{ o.record.display_cost|floatformat:0|intcomma }}</td>
+      <td data-label="Ratio vs Median">{{ o.ratio|floatformat:2 }}&times;</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if risk_alerts.cycle_outliers %}
+<h4 style="margin-top: var(--space-4);">Cycle-Time Outliers</h4>
+<table class="record-list">
+  <thead><tr><th>Record</th><th>Days: Plan to Completion</th><th>Ratio vs Median</th></tr></thead>
+  <tbody>
+    {% for o in risk_alerts.cycle_outliers %}
+    <tr>
+      <td data-label="Record"><a href="{% url 'staff_record_detail' o.record.id %}">{{ o.record.title }}</a></td>
+      <td data-label="Days">{{ o.days }}</td>
+      <td data-label="Ratio vs Median">{{ o.ratio|floatformat:2 }}&times;</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if risk_alerts.vendor_repeat_complaints %}
+<h4 style="margin-top: var(--space-4);">Vendors With Repeated Complaints</h4>
+<table class="record-list">
+  <thead><tr><th>Vendor</th><th>Complaints</th><th>Affected Records</th></tr></thead>
+  <tbody>
+    {% for v in risk_alerts.vendor_repeat_complaints %}
+    <tr>
+      <td data-label="Vendor">{{ v.vendor_name }}</td>
+      <td data-label="Complaints">{{ v.count }}</td>
+      <td data-label="Affected Records">
+        {% for r in v.records %}<a href="{% url 'staff_record_detail' r.id %}">{{ r.title }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if risk_alerts.overdue_complaints %}
+<h4 style="margin-top: var(--space-4);">Overdue Complaints</h4>
+<table class="record-list">
+  <thead><tr><th>Record</th><th>Filed</th><th>Response Due</th></tr></thead>
+  <tbody>
+    {% for c in risk_alerts.overdue_complaints %}
+    <tr>
+      <td data-label="Record"><a href="{% url 'staff_record_detail' c.record.id %}">{{ c.record.title }}</a></td>
+      <td data-label="Filed">{{ c.submitted_at|date:"Y-m-d" }}</td>
+      <td data-label="Response Due">{{ c.response_deadline|date:"Y-m-d" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% else %}
+<p style="color: var(--muted);">No risk alerts at this time.</p>
+{% endif %}
+
+<h3 style="margin-top: var(--space-5);">Records by Status</h3>
 <table class="record-list">
   <thead><tr><th>Status</th><th>Count</th></tr></thead>
   <tbody>
