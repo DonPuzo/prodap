@@ -1,5 +1,6 @@
 import csv
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
@@ -393,6 +394,128 @@ def export_csv(request):
         row = _record_to_dict(record)
         writer.writerow({field: row[field] for field in EXPORT_FIELDS})
     return response
+
+
+# --- OCDS (Open Contracting Data Standard) export — blueprint Phase 5
+# interoperability, the last open item in that phase besides NOCOPO
+# (which has no documented API/schema to target here — this feed is the
+# honest deliverable: a standards-compliant export any NOCOPO-style
+# aggregator, or any OCDS tool, could ingest).
+#
+# Emits one "compiled" release per record — OCDS's own term for a single
+# current-snapshot release — rather than mapping every StatusUpdate to a
+# precise incremental release event, which this data model doesn't
+# cleanly support yet. ocid uses a placeholder "ocds-prodap-" prefix: a
+# real external publication should register an official prefix at
+# https://ocds-prefixes.readthedocs.io/ first — this is not presented as
+# already registered. Same honesty posture as LawProfile's placeholder
+# day-count fields: standard-compliant shape, institution-specific
+# details (procurementMethodDetails, license) flagged as adjustable
+# rather than asserted with false certainty.
+
+OCDS_TENDER_STATUS_MAP = {
+    ProcurementRecord.Status.PLANNING: 'planning',
+    ProcurementRecord.Status.ADVERTISED: 'active',
+    ProcurementRecord.Status.TENDERING: 'active',
+    ProcurementRecord.Status.AWARDED: 'complete',
+    ProcurementRecord.Status.IMPLEMENTATION: 'complete',
+    ProcurementRecord.Status.COMPLETED: 'complete',
+    ProcurementRecord.Status.ABANDONED: 'cancelled',
+}
+
+# OCDS procurementMethod is a closed codelist (open/selective/limited/
+# direct) — PPA 2007 method names don't map 1:1, so only include the
+# field when reasonably confident; procurementMethodDetails always
+# carries the real PPA method name regardless, so no information is lost
+# for an unmapped method.
+OCDS_PROCUREMENT_METHOD_MAP = {
+    'Open Competitive Bidding': 'open',
+    'Restricted Tendering': 'selective',
+    'Two-Stage Tendering': 'selective',
+    'Request for Quotations': 'limited',
+    'Direct Procurement': 'direct',
+    'Emergency Procurement': 'direct',
+}
+
+
+def _ocds_release(record):
+    ocid = f'ocds-prodap-{record.id}'
+    buyer = {'id': 'buyer', 'name': settings.TENANT_NAME}
+    parties = [{'id': 'buyer', 'name': settings.TENANT_NAME, 'roles': ['buyer', 'procuringEntity']}]
+
+    tender = {
+        'id': str(record.id),
+        'title': record.title,
+        'description': record.description,
+        'status': OCDS_TENDER_STATUS_MAP.get(record.status, 'planning'),
+        'procurementMethodDetails': record.procurement_method,
+        'value': {'amount': float(record.estimated_cost), 'currency': 'NGN'},
+    }
+    ocds_method = OCDS_PROCUREMENT_METHOD_MAP.get(record.procurement_method)
+    if ocds_method:
+        tender['procurementMethod'] = ocds_method
+
+    advertisement = get_published_advertisement(record)
+    if advertisement:
+        tender['tenderPeriod'] = {'endDate': advertisement.closing_date.isoformat()}
+
+    release = {
+        'ocid': ocid,
+        'id': f'{ocid}-{int(record.updated_at.timestamp())}',
+        'date': record.updated_at.isoformat(),
+        'tag': ['compiled'],
+        'initiationType': 'tender',
+        'parties': parties,
+        'buyer': buyer,
+        'planning': {'budget': {'amount': {'amount': float(record.estimated_cost), 'currency': 'NGN'}}},
+        'tender': tender,
+    }
+
+    award = advertisement.solicitation.award if advertisement and hasattr(advertisement.solicitation, 'award') else None
+    if award:
+        if record.vendor_name:
+            parties.append({'id': 'supplier', 'name': record.vendor_name, 'roles': ['supplier', 'tenderer']})
+        award_value = {'amount': float(record.awarded_cost), 'currency': 'NGN'} if record.awarded_cost is not None else None
+        release['awards'] = [{
+            'id': str(award.id),
+            'title': record.title,
+            'status': 'active',
+            'date': award.awarded_at.isoformat(),
+            'value': award_value,
+            'suppliers': [{'name': record.vendor_name}] if record.vendor_name else [],
+        }]
+        contract = getattr(award, 'contract', None)
+        if contract:
+            # OCDS's base contract.status codelist (pending/active/cancelled/
+            # terminated) has no distinct "successfully completed" value —
+            # a fuller implementation would use the status extension to
+            # distinguish that from early termination.
+            contract_status = 'active' if record.status == ProcurementRecord.Status.IMPLEMENTATION else 'terminated'
+            release['contracts'] = [{
+                'id': str(contract.id),
+                'awardID': str(award.id),
+                'title': record.title,
+                'status': contract_status,
+                'period': {
+                    'startDate': contract.start_date.isoformat(),
+                    'endDate': contract.end_date.isoformat(),
+                },
+                'value': award_value,
+                'dateSigned': contract.signed_date.isoformat(),
+            }]
+    return release
+
+
+def export_ocds(request):
+    releases = [_ocds_release(record) for record in ProcurementRecord.objects.select_related('law_profile').all()]
+    return JsonResponse({
+        'uri': request.build_absolute_uri(),
+        'version': '1.1',
+        'publishedDate': timezone.now().isoformat(),
+        'publisher': {'name': settings.TENANT_NAME},
+        'license': 'https://creativecommons.org/publicdomain/zero/1.0/',
+        'releases': releases,
+    })
 
 
 # --- Procurement office backend (login required) ---

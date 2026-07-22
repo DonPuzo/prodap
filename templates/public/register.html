@@ -82,7 +82,7 @@
 
 <div class="export-links">
   <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-  {{ ui.download_data }}: <a href="{% url 'export_json' %}">JSON</a> · <a href="{% url 'export_csv' %}">CSV</a>
+  {{ ui.download_data }}: <a href="{% url 'export_json' %}">JSON</a> · <a href="{% url 'export_csv' %}">CSV</a> · <a href="{% url 'export_ocds' %}">OCDS</a>
 </div>
 
 {% endblock %}

@@ -1,4 +1,5 @@
 import datetime
+import json
 
 from django.core.exceptions import ValidationError
 from django.test import Client, TestCase
@@ -361,6 +362,10 @@ class PublicAccessTests(TestCase):
 
     def test_export_json_accessible_without_login(self):
         response = self.client.get(reverse('export_json'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_export_ocds_accessible_without_login(self):
+        response = self.client.get(reverse('export_ocds'))
         self.assertEqual(response.status_code, 200)
 
     def test_staff_list_redirects_when_not_logged_in(self):
@@ -3049,3 +3054,105 @@ class RiskAlertTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Cost Outliers')
         self.assertContains(response, outlier.title)
+
+
+class OCDSExportTests(TestCase):
+    """Open Contracting Data Standard export (blueprint Phase 5
+    interoperability) — one compiled release per record, public, no
+    login. See export_ocds's own docstring in views.py for the honesty
+    caveats on ocid/license/procurementMethod."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.fy = make_financial_year(self.law_profile)
+        self.staff = User.objects.create_user(username='pu_ocds', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.approver = User.objects.create_user(username='ao_ocds', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.requester = User.objects.create_user(username='ru_ocds', password='x', role=User.Role.REQUESTING_UNIT)
+        self.finance = User.objects.create_user(username='fin_ocds', password='x', role=User.Role.FINANCE)
+        make_threshold_rule(self.law_profile, self.staff, max_value=5_000_000, authority='Accounting Officer')
+
+    def _get_release(self, record):
+        response = self.client.get(reverse('export_ocds'))
+        payload = json.loads(response.content)
+        matches = [r for r in payload['releases'] if r['tender']['id'] == str(record.id)]
+        self.assertEqual(len(matches), 1)
+        return payload, matches[0]
+
+    def test_planning_record_maps_to_planning_status_and_ocid_shape(self):
+        record = make_record(self.law_profile, self.staff)
+        _, release = self._get_release(record)
+        self.assertEqual(release['tender']['status'], 'planning')
+        self.assertTrue(release['ocid'].startswith('ocds-prodap-'))
+        self.assertEqual(release['tender']['procurementMethodDetails'], record.procurement_method)
+
+    def test_open_competitive_bidding_maps_to_open_ocds_method(self):
+        record = make_record(self.law_profile, self.staff, procurement_method='Open Competitive Bidding')
+        _, release = self._get_release(record)
+        self.assertEqual(release['tender'].get('procurementMethod'), 'open')
+
+    def test_publisher_name_matches_tenant_name(self):
+        from django.conf import settings
+        record = make_record(self.law_profile, self.staff)
+        payload, _ = self._get_release(record)
+        self.assertEqual(payload['publisher']['name'], settings.TENANT_NAME)
+
+    def _build_awarded_record(self):
+        plan = ProcurementPlan.objects.create(law_profile=self.law_profile, financial_year=self.fy, prepared_by=self.staff)
+        line = PlanLine.objects.create(
+            plan=plan, department='Bursary', item_description='Chairs', justification='need',
+            estimated_cost=480_000, budget_line='B1', proposed_quarter='Q1', proposed_by=self.requester,
+        )
+        approve_plan(plan=plan, actor=self.approver)
+        line.refresh_from_db()
+        req = Requisition.objects.create(
+            plan_line=line, title='Chairs requisition', department='Bursary',
+            requested_value=480_000, budget_source=ProcurementRecord.BudgetSource.IGR, requested_by=self.requester,
+        )
+        submit_requisition(requisition=req, actor=self.requester)
+        confirm_requisition_funds(requisition=req, actor=self.finance)
+        review_requisition_packaging(requisition=req, actor=self.staff, note='Checked, no splitting.')
+        determine_requisition_method(requisition=req, actor=self.staff)
+        record = create_record_from_requisition(requisition=req, actor=self.staff, record_fields={
+            'title': 'OCDS Chairs Record', 'location': 'Main Campus',
+            'planned_start_date': datetime.date.today(),
+            'planned_end_date': datetime.date.today() + datetime.timedelta(days=30),
+        })
+        solicitation = prepare_solicitation(record=record, actor=self.staff, fields=SOLICITATION_FIELDS)
+        approve_solicitation(solicitation=solicitation, actor=self.approver)
+        publish_advertisement(
+            solicitation=solicitation, actor=self.staff, channels=['institution_website'],
+            publication_proof='Posted.', closing_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        solicitation.advertisement.closing_date = datetime.date.today() - datetime.timedelta(days=1)
+        solicitation.advertisement.save(update_fields=['closing_date'])
+        bid = record_bid(solicitation=solicitation, actor=self.staff, vendor_name='Acme Furniture Ltd', bid_amount=480_000)
+        record_tenders_board_review(
+            solicitation=solicitation, actor=self.staff, recommended_bid=bid, evaluation_summary='Lowest bid.',
+        )
+        award = award_solicitation(
+            solicitation=solicitation, actor=self.approver, winning_bid=bid, decision_note='Lowest bid.',
+        )
+        record.refresh_from_db()
+        return record, award
+
+    def test_awarded_record_includes_award_and_supplier_party(self):
+        record, award = self._build_awarded_record()
+        _, release = self._get_release(record)
+        self.assertIn('awards', release)
+        self.assertEqual(release['awards'][0]['id'], str(award.id))
+        self.assertEqual(release['awards'][0]['value']['amount'], 480_000.0)
+        supplier_names = [p['name'] for p in release['parties'] if 'supplier' in p['roles']]
+        self.assertIn('Acme Furniture Ltd', supplier_names)
+        self.assertEqual(release['tender']['status'], 'complete')
+
+    def test_signed_contract_included(self):
+        record, award = self._build_awarded_record()
+        sign_contract(
+            award=award, actor=self.staff, contract_reference='CT-OCDS-1',
+            vendor_signatory_name='Acme MD', signed_date=datetime.date.today(),
+            start_date=datetime.date.today(), end_date=datetime.date.today() + datetime.timedelta(days=90),
+        )
+        _, release = self._get_release(record)
+        self.assertIn('contracts', release)
+        self.assertEqual(release['contracts'][0]['awardID'], str(award.id))
+        self.assertEqual(release['contracts'][0]['status'], 'active')

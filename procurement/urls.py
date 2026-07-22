@@ -14,6 +14,7 @@ urlpatterns = [
     path('projects/<uuid:pk>/complain/', views.file_complaint, name='file_complaint'),
     path('export/data.json', views.export_json, name='export_json'),
     path('export/data.csv', views.export_csv, name='export_csv'),
+    path('export/ocds.json', views.export_ocds, name='export_ocds'),
     path('set-lang/<str:lang_code>/', views.set_lang, name='set_lang'),
 
     # Procurement office backend — login required.
