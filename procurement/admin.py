@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
 from .models import (
+    Abandonment,
     Advertisement,
     AuditEvent,
     Award,
@@ -366,6 +367,21 @@ class ContractCompletionAdmin(admin.ModelAdmin):
 
     list_display = ('contract', 'completion_date', 'completed_by', 'completed_at')
     readonly_fields = [f.name for f in ContractCompletion._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Abandonment)
+class AbandonmentAdmin(admin.ModelAdmin):
+    """Every field is service-written-once via services.abandon_record()
+    — no legitimate admin edit path."""
+
+    list_display = ('record', 'reason', 'previous_status', 'abandoned_by', 'abandoned_at')
+    readonly_fields = [f.name for f in Abandonment._meta.fields]
 
     def has_add_permission(self, request):
         return False

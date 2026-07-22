@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import (
+    Abandonment,
     Advertisement,
     AuditEvent,
     Award,
@@ -865,3 +866,34 @@ def record_payment(*, invoice, actor, amount, payment_date, payment_reference):
         )
         log_audit_event(target=payment, action=AuditEvent.Action.PAYMENT_RECORDED, actor=actor)
     return payment
+
+
+# --- Abandonment: the only sanctioned way a ProcurementRecord reaches
+# Abandoned status (see Abandonment's docstring) — closes the last
+# remaining unconditional manual-dropdown gap in the status machine. ---
+
+def abandon_record(*, record, actor, reason, justification):
+    _require_no_pending_complaint(record)
+    if record.status in (ProcurementRecord.Status.COMPLETED, ProcurementRecord.Status.ABANDONED):
+        raise ValidationError(f'This record is {record.status} — it cannot be abandoned from this status.')
+    if hasattr(record, 'abandonment'):
+        raise ValidationError('This record has already been abandoned.')
+    if reason not in Abandonment.Reason.values:
+        raise ValidationError('A valid abandonment reason is required.')
+    if not justification.strip():
+        raise ValidationError('A justification is required — this becomes the public explanation.')
+    previous_status = record.status
+    with transaction.atomic():
+        abandonment = Abandonment.objects.create(
+            record=record, previous_status=previous_status, reason=reason,
+            justification=justification.strip(), abandoned_by=actor,
+        )
+        log_audit_event(
+            target=abandonment, action=AuditEvent.Action.RECORD_ABANDONED, actor=actor, reason=justification,
+            old_value={'status': previous_status}, new_value={'reason': reason},
+        )
+        transition_status(
+            record=record, new_status=ProcurementRecord.Status.ABANDONED, updated_by=actor,
+            note=f'Abandoned ({abandonment.get_reason_display()}): {justification.strip()}',
+        )
+    return abandonment

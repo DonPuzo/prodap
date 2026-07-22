@@ -19,6 +19,27 @@
   <a class="btn btn-secondary" href="{% url 'public_record_detail' record.id %}">Public page</a>
 </div>
 
+{% if abandonment %}
+<div class="form-card" style="margin-top: var(--space-4); border-color: #a02622;">
+  <h3 style="margin-top: 0;">Abandoned</h3>
+  <p><strong>{{ abandonment.get_reason_display }}</strong></p>
+  <p>{{ abandonment.justification }}</p>
+  <p style="color: var(--muted); font-size: .8em;">
+    Decided by {{ abandonment.abandoned_by.username }} on {{ abandonment.abandoned_at|date:"Y-m-d" }}
+    — was {{ abandonment.previous_status }}.
+  </p>
+</div>
+{% elif abandonment_form %}
+<div class="form-card" style="margin-top: var(--space-4);">
+  <h3 style="margin-top: 0;">Abandon this record</h3>
+  <form method="post" action="{% url 'staff_record_abandon' record.id %}">
+    {% csrf_token %}
+    {{ abandonment_form.as_p }}
+    <button class="btn btn-flag" type="submit">Abandon record</button>
+  </form>
+</div>
+{% endif %}
+
 <h3 style="margin-top: var(--space-4);">Solicitation &amp; Advertisement</h3>
 
 {% if solicitation %}

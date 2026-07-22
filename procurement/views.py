@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.core.exceptions import PermissionDenied, ValidationError
 
 from .forms import (
+    AbandonmentForm,
     AdvertisementForm,
     AwardForm,
     BidForm,
@@ -46,12 +47,13 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Award, Bid, Clarification, Complaint, Contract, ContractCompletion, Invoice, Milestone, Payment,
+    Abandonment, Award, Bid, Clarification, Complaint, Contract, ContractCompletion, Invoice, Milestone, Payment,
     PerformanceGuarantee, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
     Requisition, Solicitation, TendersBoardReview, User,
 )
 from .permissions import role_required
 from .services import (
+    abandon_record,
     add_milestone,
     answer_clarification,
     approve_plan,
@@ -191,6 +193,10 @@ def public_about(request):
 def public_record_detail(request, pk):
     record = get_object_or_404(ProcurementRecord.objects.select_related('law_profile'), pk=pk)
     history = record.status_updates.select_related('updated_by').all()
+    # Public from creation — why a project was abandoned is core
+    # public-interest transparency, same disclosure tier as Award's
+    # decision_note. See Abandonment's docstring.
+    abandonment = getattr(record, 'abandonment', None)
     flagged_session = request.session.get('flagged_records', [])
     advertisement = get_published_advertisement(record)
     clarifications_answered = []
@@ -273,6 +279,7 @@ def public_record_detail(request, pk):
         'complaints_resolved': complaints_resolved,
         'complaints_pending_count': complaints_pending_count,
         'complaints_overdue_count': complaints_overdue_count,
+        'abandonment': abandonment,
         'contract': contract,
         'milestones': milestones,
         'guarantee': guarantee,
@@ -689,9 +696,15 @@ def staff_record_detail(request, pk):
     versions = record.solicitations.all()
     advertisement = getattr(solicitation, 'advertisement', None) if solicitation else None
     complaints = record.complaints.select_related('resolved_by').all()
+    abandonment = getattr(record, 'abandonment', None)
+    can_abandon = not abandonment and record.status not in (
+        ProcurementRecord.Status.COMPLETED, ProcurementRecord.Status.ABANDONED,
+    )
     return render(request, 'staff/record_detail.html', {
         'record': record, 'solicitation': solicitation, 'versions': versions, 'advertisement': advertisement,
         'complaints': complaints, 'complaint_resolve_form': ComplaintResolveForm(),
+        'abandonment': abandonment,
+        'abandonment_form': AbandonmentForm() if can_abandon else None,
     })
 
 
@@ -939,6 +952,27 @@ def staff_complaint_resolve(request, pk):
             except ValidationError as exc:
                 messages.error(request, exc.message)
     return redirect('staff_record_detail', pk=complaint.record_id)
+
+
+@role_required(User.Role.ACCOUNTING_OFFICER)
+def staff_record_abandon(request, pk):
+    """Closes the last unconditional manual-dropdown gap in the status
+    machine — see Abandonment's docstring. Accounting Officer sign-off,
+    same institutional-decision role as Award/Complaint resolution."""
+    record = get_object_or_404(ProcurementRecord, pk=pk)
+    if request.method == 'POST':
+        form = AbandonmentForm(request.POST)
+        if form.is_valid():
+            try:
+                abandon_record(
+                    record=record, actor=request.user,
+                    reason=form.cleaned_data['reason'], justification=form.cleaned_data['justification'],
+                )
+            except ValidationError as exc:
+                messages.error(request, exc.message if hasattr(exc, 'message') else exc.messages)
+        else:
+            messages.error(request, 'Invalid abandonment submission — check the reason and justification.')
+    return redirect('staff_record_detail', pk=record.pk)
 
 
 @role_required(User.Role.PROCUREMENT_UNIT)

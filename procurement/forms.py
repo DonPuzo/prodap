@@ -3,8 +3,8 @@ from django.contrib.auth.forms import AuthenticationForm
 
 from .i18n import DEFAULT_LANG, get_strings
 from .models import (
-    Advertisement, Bid, LawProfile, Milestone, PlanLine, ProcurementPlan, ProcurementRecord, Requisition,
-    Solicitation,
+    Abandonment, Advertisement, Bid, LawProfile, Milestone, PlanLine, ProcurementPlan, ProcurementRecord,
+    Requisition, Solicitation,
 )
 
 
@@ -90,6 +90,10 @@ class StatusTransitionForm(forms.Form):
     def __init__(self, *args, current_status=None, **kwargs):
         super().__init__(*args, **kwargs)
         excluded = {current_status}
+        # Abandoned is now evidence-derived (see services.abandon_record) —
+        # closes the last remaining unconditional manual-dropdown gap; a
+        # reason and public justification are required from every status.
+        excluded.add(ProcurementRecord.Status.ABANDONED)
         if current_status == ProcurementRecord.Status.PLANNING:
             # Planning -> Advertised is now evidence-derived (see
             # services.publish_advertisement) — not a free manual pick, for
@@ -411,3 +415,11 @@ class PaymentForm(forms.Form):
     amount = forms.DecimalField(max_digits=16, decimal_places=2, required=True, min_value=0.01)
     payment_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=True)
     payment_reference = forms.CharField(max_length=100, required=True)
+
+
+class AbandonmentForm(forms.Form):
+    reason = forms.ChoiceField(choices=Abandonment.Reason.choices)
+    justification = forms.CharField(
+        widget=forms.Textarea(attrs={'rows': 3}), required=True,
+        help_text='Required — becomes the public explanation for why this project was abandoned.',
+    )

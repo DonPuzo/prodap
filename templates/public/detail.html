@@ -51,6 +51,15 @@
   </div>
 </div>
 
+{% if abandonment %}
+<div class="flag-box" style="border-color: #a02622;">
+  <h3>{{ ui.abandonment_heading }}</h3>
+  <p><strong>{{ abandonment.get_reason_display }}</strong></p>
+  <p>{{ abandonment.justification }}</p>
+  <p style="color: var(--muted); font-size: .85em;">{{ abandonment.abandoned_at|date:"Y-m-d" }}</p>
+</div>
+{% endif %}
+
 {% if advertisement %}
 <h3>Tender / Solicitation Details</h3>
 <div class="detail-grid">

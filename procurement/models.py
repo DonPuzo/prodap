@@ -492,6 +492,7 @@ class AuditEvent(models.Model):
         INVOICE_REVIEWED = 'invoice_reviewed', 'Invoice Reviewed'
         PAYMENT_RECORDED = 'payment_recorded', 'Payment Recorded'
         TENDERS_BOARD_REVIEWED = 'tenders_board_reviewed', 'Tenders Board Reviewed'
+        RECORD_ABANDONED = 'record_abandoned', 'Record Abandoned'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -1100,3 +1101,44 @@ class Payment(models.Model):
 
     def __str__(self):
         return f'Payment {self.payment_reference} for {self.invoice.invoice_number}'
+
+
+class Abandonment(models.Model):
+    """The only sanctioned way a ProcurementRecord reaches Abandoned status
+    (see services.abandon_record) — closes the last remaining manual-dropdown
+    gap in the status machine, matching the same evidence-before-status-change
+    discipline already applied to Advertised/Awarded/Implementation/Completed.
+
+    Previously `Abandoned` was a bare status flip via the free-form
+    StatusTransitionForm with no required reason — the blueprint calls for
+    the generic status to be split into specific, accountable grounds
+    instead. `reason` uses categories drawn from PPA 2007 Section 28's
+    general grounds for cancellation of procurement proceedings (need
+    eliminated, adverse change in circumstances, non-responsive bids,
+    integrity concerns, or a catch-all) — adjust per institution/legal
+    review if a jurisdiction's LawProfile specifies different categories;
+    same honesty caveat as LawProfile.default_minimum_bidding_days.
+
+    Public from creation: WHY a project was abandoned (taxpayer money
+    committed, then stopped) is core public-interest transparency, the
+    institution's own accountable output — same disclosure tier as
+    Award.decision_note/Complaint.resolution_note."""
+
+    class Reason(models.TextChoices):
+        NEED_ELIMINATED = 'need_eliminated', 'Goods/works/services no longer needed'
+        CIRCUMSTANCES_CHANGED = 'circumstances_changed', 'Change in circumstances — benefit no longer likely'
+        NO_RESPONSIVE_BIDS = 'no_responsive_bids', 'All bids received were non-responsive'
+        BUDGET_EXCEEDED = 'budget_exceeded', 'All bids substantially exceeded the available budget'
+        INTEGRITY_CONCERN = 'integrity_concern', 'Evidence of collusion or corrupt/fraudulent practice'
+        OTHER = 'other', 'Other (see justification)'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    record = models.OneToOneField(ProcurementRecord, on_delete=models.PROTECT, related_name='abandonment')
+    previous_status = models.CharField(max_length=32, help_text='The status the record was in immediately before abandonment.')
+    reason = models.CharField(max_length=32, choices=Reason.choices)
+    justification = models.TextField(help_text='Public — the institution\'s accountable explanation.')
+    abandoned_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='abandonments_decided')
+    abandoned_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Abandonment of {self.record.title} ({self.get_reason_display()})'

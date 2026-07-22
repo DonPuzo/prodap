@@ -87,6 +87,7 @@ urlpatterns = [
     ),
     path('staff/solicitations/<uuid:pk>/award/', views.staff_award_decide, name='staff_award_decide'),
     path('staff/complaints/<uuid:pk>/resolve/', views.staff_complaint_resolve, name='staff_complaint_resolve'),
+    path('staff/records/<uuid:pk>/abandon/', views.staff_record_abandon, name='staff_record_abandon'),
     path('staff/awards/<uuid:pk>/contract/sign/', views.staff_contract_sign, name='staff_contract_sign'),
     path('staff/contracts/<uuid:pk>/milestones/add/', views.staff_milestone_add, name='staff_milestone_add'),
     path(

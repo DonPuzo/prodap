@@ -125,6 +125,7 @@ STRINGS = {
         'payments_heading': 'Payments',
         'total_paid_label': 'Total paid',
         'completion_heading': 'Final Acceptance',
+        'abandonment_heading': 'Project Abandoned',
     },
     'pcm': {
         'site_tagline': 'Public Procurement Transparency Dashboard (Wetin Dem Dey Buy For Public)',
@@ -243,6 +244,7 @@ STRINGS = {
         'payments_heading': 'Payments',
         'total_paid_label': 'Total wey dem don pay',
         'completion_heading': 'Final Acceptance',
+        'abandonment_heading': 'Dem Don Abandon Dis Project',
     },
 }
 

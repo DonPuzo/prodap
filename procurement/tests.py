@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from .forms import ProcurementRecordForm, RequisitionForm
 from .models import (
+    Abandonment,
     Advertisement,
     Award,
     AuditEvent,
@@ -35,6 +36,7 @@ from .models import (
 from .models import LawProfile
 from .services import (
     SeparationOfDutiesError,
+    abandon_record,
     add_milestone,
     answer_clarification,
     approve_plan,
@@ -144,6 +146,84 @@ class StatusTransitionTests(TestCase):
         history = list(self.record.status_updates.all())
         self.assertEqual([u.new_status for u in history], ['Advertised', 'Tendering', 'Awarded'])
         self.assertEqual([u.old_status for u in history], ['Planning', 'Advertised', 'Tendering'])
+
+
+class AbandonmentTests(TestCase):
+    """The only sanctioned way a ProcurementRecord reaches Abandoned status
+    (see services.abandon_record) — closes the last unconditional
+    manual-dropdown gap, mirroring StatusTransitionTests' own theme."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.creator = User.objects.create_user(username='pu_abandon', password='x', role=User.Role.PROCUREMENT_UNIT)
+        self.ao = User.objects.create_user(username='ao_abandon', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        self.record = make_record(self.law_profile, self.creator)
+
+    def test_requires_valid_reason(self):
+        with self.assertRaises(ValidationError):
+            abandon_record(record=self.record, actor=self.ao, reason='not_a_real_reason', justification='x')
+
+    def test_requires_justification(self):
+        with self.assertRaises(ValidationError):
+            abandon_record(
+                record=self.record, actor=self.ao, reason=Abandonment.Reason.NEED_ELIMINATED, justification='',
+            )
+
+    def test_cannot_abandon_twice(self):
+        abandon_record(
+            record=self.record, actor=self.ao, reason=Abandonment.Reason.NEED_ELIMINATED,
+            justification='No longer needed.',
+        )
+        with self.assertRaises(ValidationError):
+            abandon_record(record=self.record, actor=self.ao, reason=Abandonment.Reason.OTHER, justification='Again.')
+
+    def test_cannot_abandon_completed_record(self):
+        transition_status(record=self.record, new_status=ProcurementRecord.Status.COMPLETED, updated_by=self.ao)
+        with self.assertRaises(ValidationError):
+            abandon_record(record=self.record, actor=self.ao, reason=Abandonment.Reason.OTHER, justification='Too late.')
+
+    def test_blocked_by_pending_complaint(self):
+        submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Concern.',
+        )
+        with self.assertRaises(ValidationError):
+            abandon_record(record=self.record, actor=self.ao, reason=Abandonment.Reason.OTHER, justification='x')
+
+    def test_full_happy_path_sets_status_and_public_disclosure(self):
+        abandonment = abandon_record(
+            record=self.record, actor=self.ao, reason=Abandonment.Reason.BUDGET_EXCEEDED,
+            justification='All bids substantially exceeded the approved budget envelope.',
+        )
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, ProcurementRecord.Status.ABANDONED)
+        self.assertEqual(abandonment.previous_status, ProcurementRecord.Status.PLANNING)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='abandonment', action=AuditEvent.Action.RECORD_ABANDONED,
+            ).exists()
+        )
+        updates = list(self.record.status_updates.all())
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].new_status, ProcurementRecord.Status.ABANDONED)
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, 'All bids substantially exceeded the approved budget envelope.')
+
+    def test_abandon_view_rejects_wrong_role(self):
+        self.client.force_login(self.creator)
+        response = self.client.post(reverse('staff_record_abandon', args=[self.record.id]), {
+            'reason': Abandonment.Reason.OTHER, 'justification': 'x',
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_abandon_view_allows_accounting_officer(self):
+        self.client.force_login(self.ao)
+        response = self.client.post(reverse('staff_record_abandon', args=[self.record.id]), {
+            'reason': Abandonment.Reason.OTHER, 'justification': 'Duplicate requisition, cancelling.',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, ProcurementRecord.Status.ABANDONED)
 
 
 class LawProfileValidationTests(TestCase):
@@ -593,19 +673,30 @@ class LegacyDataCompatibilityTests(TestCase):
         """Planning -> Advertised specifically now requires
         publish_advertisement (see StatusTransitionForm) — every OTHER
         transition, including for legacy no-requisition records, is
-        untouched by that change (Phase 2 non-cryptographic slice)."""
+        untouched by that change (Phase 2 non-cryptographic slice). Uses
+        Tendering here since Abandoned is also evidence-gated now (see
+        services.abandon_record) — not a free manual pick either."""
         self.client.force_login(self.actor)
         response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
-            'new_status': 'Abandoned', 'note': 'Moving forward',
+            'new_status': 'Tendering', 'note': 'Moving forward',
         })
         self.assertEqual(response.status_code, 302)
         self.record.refresh_from_db()
-        self.assertEqual(self.record.status, 'Abandoned')
+        self.assertEqual(self.record.status, 'Tendering')
 
     def test_planning_to_advertised_no_longer_manually_selectable(self):
         self.client.force_login(self.actor)
         response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
             'new_status': 'Advertised', 'note': 'Attempted manual bypass',
+        })
+        self.assertEqual(response.status_code, 200)  # form re-rendered with error, not redirected
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'Planning')  # unchanged
+
+    def test_abandoned_no_longer_manually_selectable(self):
+        self.client.force_login(self.actor)
+        response = self.client.post(reverse('staff_status_transition', args=[self.record.id]), {
+            'new_status': 'Abandoned', 'note': 'Attempted manual bypass',
         })
         self.assertEqual(response.status_code, 200)  # form re-rendered with error, not redirected
         self.record.refresh_from_db()
@@ -2677,6 +2768,15 @@ class SolicitationAdminLockdownTests(TestCase):
         self.assertFalse(admin_instance.has_add_permission(request=None))
         self.assertFalse(admin_instance.has_delete_permission(request=None))
         all_fields = {f.name for f in TendersBoardReview._meta.fields}
+        self.assertEqual(set(admin_instance.readonly_fields), all_fields)
+
+    def test_abandonment_admin_has_no_add_permission(self):
+        from .admin import AbandonmentAdmin
+        from django.contrib.admin.sites import site
+        admin_instance = AbandonmentAdmin(Abandonment, site)
+        self.assertFalse(admin_instance.has_add_permission(request=None))
+        self.assertFalse(admin_instance.has_delete_permission(request=None))
+        all_fields = {f.name for f in Abandonment._meta.fields}
         self.assertEqual(set(admin_instance.readonly_fields), all_fields)
 
 
