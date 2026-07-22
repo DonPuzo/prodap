@@ -79,6 +79,9 @@
     <span class="badge {% if c.status == 'pending' %}badge-pending{% elif c.status == 'upheld' %}badge-approved{% else %}badge-rejected{% endif %}">
       {{ c.get_status_display }}
     </span>
+    {% if c.is_overdue %}
+    <span class="badge badge-rejected">Overdue — response due {{ c.response_deadline|date:"Y-m-d" }}</span>
+    {% endif %}
   </p>
   <p>{{ c.description }}</p>
   <p style="color: var(--muted); font-size: .8em;">Filed {{ c.submitted_at|date:"Y-m-d H:i" }}</p>

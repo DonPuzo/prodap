@@ -427,6 +427,7 @@ ul.messages { list-style: none; padding: 0; margin: var(--space-4) 0; }
 .flag-box h3 { margin-top: 0; }
 .flag-count { color: var(--muted); font-size: .9em; margin-bottom: var(--space-2); }
 .flag-count strong { color: var(--fg); }
+.flag-count-overdue { color: #a02622; font-weight: 600; }
 .flag-toggle { display: inline-flex; align-items: center; gap: .4em; }
 .flag-form { margin-top: var(--space-3); display: none; }
 .flag-form.open { display: block; }

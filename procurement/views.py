@@ -232,7 +232,9 @@ def public_record_detail(request, pk):
     # docstring for why this differs from the Q&A disclosure pattern.
     all_complaints = record.complaints.all()
     complaints_resolved = [c for c in all_complaints if c.status != Complaint.Status.PENDING]
-    complaints_pending_count = sum(1 for c in all_complaints if c.status == Complaint.Status.PENDING)
+    pending_complaints = [c for c in all_complaints if c.status == Complaint.Status.PENDING]
+    complaints_pending_count = len(pending_complaints)
+    complaints_overdue_count = sum(1 for c in pending_complaints if c.is_overdue)
     # Contract + milestones: public from signing — contract terms and a
     # delivery timeline are core transparency info, not competitively
     # sensitive the way bids/evaluation are.
@@ -270,6 +272,7 @@ def public_record_detail(request, pk):
         'tenders_board_review': tenders_board_review,
         'complaints_resolved': complaints_resolved,
         'complaints_pending_count': complaints_pending_count,
+        'complaints_overdue_count': complaints_overdue_count,
         'contract': contract,
         'milestones': milestones,
         'guarantee': guarantee,

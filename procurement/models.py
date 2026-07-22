@@ -1,3 +1,4 @@
+import datetime
 import uuid
 
 from django.conf import settings
@@ -6,6 +7,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 
 class User(AbstractUser):
@@ -49,6 +51,16 @@ class LawProfile(models.Model):
             'proposals") but no complete table the way it does for approval thresholds. '
             'Adjust per institution/legal review; a future increment could branch this per '
             'procurement_method once an authoritative table is available.'
+        ),
+    )
+    default_complaint_response_days = models.PositiveIntegerField(
+        default=14,
+        help_text=(
+            'Institutional policy default: number of days the institution aims to resolve a '
+            'complaint within, before it is flagged as overdue on both the staff and public '
+            'record views. This is a configurable placeholder, NOT a verified statutory '
+            'deadline — same honesty caveat as default_minimum_bidding_days above. Adjust per '
+            'institution/legal review.'
         ),
     )
 
@@ -869,6 +881,19 @@ class Complaint(models.Model):
 
     def __str__(self):
         return f'Complaint on {self.record.title} ({self.get_status_display()})'
+
+    @property
+    def response_deadline(self):
+        """Read live from the record's LawProfile — see
+        LawProfile.default_complaint_response_days for the honesty caveat
+        on this figure. Not stored, so a later LawProfile edit is
+        reflected immediately rather than freezing a stale deadline."""
+        days = self.record.law_profile.default_complaint_response_days
+        return self.submitted_at.date() + datetime.timedelta(days=days)
+
+    @property
+    def is_overdue(self):
+        return self.status == self.Status.PENDING and timezone.localdate() > self.response_deadline
 
 
 class Contract(models.Model):

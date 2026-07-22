@@ -3,6 +3,7 @@ import datetime
 from django.core.exceptions import ValidationError
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .forms import ProcurementRecordForm, RequisitionForm
 from .models import (
@@ -1656,6 +1657,50 @@ class ComplaintTests(TestCase):
         })
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.record.complaints.count(), 1)
+
+    def test_is_overdue_false_within_response_window(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Filed today.',
+        )
+        self.assertFalse(complaint.is_overdue)
+
+    def test_is_overdue_true_past_response_window(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Filed long ago.',
+        )
+        days = self.law_profile.default_complaint_response_days
+        stale = timezone.now() - datetime.timedelta(days=days + 1)
+        Complaint.objects.filter(pk=complaint.pk).update(submitted_at=stale)
+        complaint.refresh_from_db()
+        self.assertTrue(complaint.is_overdue)
+
+    def test_is_overdue_false_once_resolved_even_if_past_window(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Filed long ago.',
+        )
+        days = self.law_profile.default_complaint_response_days
+        stale = timezone.now() - datetime.timedelta(days=days + 1)
+        Complaint.objects.filter(pk=complaint.pk).update(submitted_at=stale)
+        resolve_complaint(
+            complaint=complaint, actor=self.approver, status=Complaint.Status.DISMISSED,
+            resolution_note='Reviewed — no irregularity found.',
+        )
+        complaint.refresh_from_db()
+        self.assertFalse(complaint.is_overdue)
+
+    def test_public_page_shows_overdue_count(self):
+        complaint = submit_complaint(
+            record=self.record, complainant_name='Jane Doe', complainant_contact='jane@example.com',
+            description='Filed long ago.',
+        )
+        days = self.law_profile.default_complaint_response_days
+        stale = timezone.now() - datetime.timedelta(days=days + 1)
+        Complaint.objects.filter(pk=complaint.pk).update(submitted_at=stale)
+        response = self.client.get(reverse('public_record_detail', args=[self.record.id]))
+        self.assertContains(response, '1 complaint(s) past the institution')
 
 
 class ComplaintHoldTests(TestCase):
