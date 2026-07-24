@@ -415,6 +415,7 @@ ul.messages { list-style: none; padding: 0; margin: var(--space-4) 0; }
 .message { padding: .7rem 1rem; border-radius: var(--radius-sm); margin-bottom: var(--space-2); font-size: .9em; }
 .message-success { background: var(--color-primary-light); color: var(--color-primary-dark); border: 1px solid var(--color-primary); }
 .message-info { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); }
+.message-error { background: #fbeaea; color: #a02622; border: 1px solid #a02622; }
 
 /* ---------- Citizen flagging ---------- */
 .flag-box {

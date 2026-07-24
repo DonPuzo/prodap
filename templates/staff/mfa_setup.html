@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="form-card" style="margin: var(--space-5) auto; max-width: 32rem;">
+  <h2>Multi-Factor Authentication</h2>
+
+  {% if already_enabled %}
+    <p>MFA is currently <strong>enabled</strong> on your account.</p>
+    <p style="color: var(--muted); font-size: .9em;">
+      Disabling requires a current code from your authenticator app or an unused backup code.
+    </p>
+    <form method="post" action="{% url 'staff_mfa_disable' %}">
+      {% csrf_token %}
+      <p>
+        <label for="id_code">Authentication code</label>
+        <input type="text" id="id_code" name="code" inputmode="numeric" autocomplete="one-time-code">
+      </p>
+      <button class="btn btn-flag" type="submit">Disable MFA</button>
+    </form>
+
+  {% elif backup_codes %}
+    <p>MFA is now <strong>enabled</strong>. Save these one-time backup codes somewhere safe — each works once,
+      and this is the only time they will ever be shown.</p>
+    <pre style="background: var(--surface-2); padding: var(--space-3); border-radius: var(--radius-md); font-size: 1.1em; line-height: 1.8;">{% for code in backup_codes %}{{ code }}
+{% endfor %}</pre>
+    <a class="btn" href="{% url 'staff_record_list' %}">Done</a>
+
+  {% else %}
+    <p>Scan this QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.), then enter the
+      6-digit code it shows to finish enabling MFA.</p>
+    <div style="background: white; padding: var(--space-3); display: inline-block; border-radius: var(--radius-md);">
+      {{ qr_svg|safe }}
+    </div>
+    <p style="color: var(--muted); font-size: .85em;">
+      Can't scan? Enter this key manually: <code>{{ secret }}</code>
+    </p>
+    {% if error %}<p class="message message-error">{{ error }}</p>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <p>
+        <label for="id_code">6-digit code</label>
+        <input type="text" id="id_code" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus>
+      </p>
+      <button class="btn" type="submit">Confirm and enable MFA</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

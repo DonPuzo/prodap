@@ -14,6 +14,7 @@ from .models import (
     FinancialYear,
     Invoice,
     LawProfile,
+    MFABackupCode,
     Milestone,
     Payment,
     PerformanceGuarantee,
@@ -28,6 +29,7 @@ from .models import (
     StatusUpdate,
     TendersBoardReview,
     ThresholdRule,
+    TOTPDevice,
     User,
 )
 
@@ -404,4 +406,40 @@ class AuditEventAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(TOTPDevice)
+class TOTPDeviceAdmin(admin.ModelAdmin):
+    """The secret itself is deliberately never shown here — unlike this
+    app's other locked-down admins (which hide *editability* but still
+    display values, since those are audit records), a raw TOTP secret is
+    a live bearer credential: even read access via a compromised admin
+    session widens the blast radius. Delete IS allowed (unlike every
+    other locked-down admin in this file) as a deliberate exception — a
+    staff member who loses both their phone and their backup codes has
+    no other recovery path in this slice, and permanently blocking
+    delete would mean permanent lockout with no support remedy."""
+
+    list_display = ('user', 'confirmed', 'failed_attempts', 'last_used_step', 'created_at', 'confirmed_at')
+    fields = ('user', 'confirmed', 'failed_attempts', 'last_used_step', 'created_at', 'confirmed_at')
+    readonly_fields = fields
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(MFABackupCode)
+class MFABackupCodeAdmin(admin.ModelAdmin):
+    """code_hash is a password-style hash, not the plaintext code, but
+    excluded from display anyway — it serves no legitimate admin purpose
+    (backup codes are opaque bearer tokens; the hash isn't independently
+    useful for support). Delete allowed for the same recovery reason as
+    TOTPDeviceAdmin."""
+
+    list_display = ('user', 'used_at', 'created_at')
+    fields = ('user', 'used_at', 'created_at')
+    readonly_fields = fields
+
+    def has_add_permission(self, request):
         return False

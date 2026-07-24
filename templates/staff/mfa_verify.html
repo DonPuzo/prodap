@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="form-card" style="margin: var(--space-5) auto;">
+  <h2>{{ ui.mfa_verify_heading }}</h2>
+  <p>{{ ui.mfa_verify_instruction }}</p>
+  {% if error %}<p class="message message-error">{{ error }}</p>{% endif %}
+  {% if not locked_out %}
+  <form method="post">
+    {% csrf_token %}
+    <p>
+      <label for="id_code">{{ ui.mfa_code_label }}</label>
+      <input type="text" id="id_code" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus>
+    </p>
+    <button class="btn" type="submit">{{ ui.mfa_verify_button }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

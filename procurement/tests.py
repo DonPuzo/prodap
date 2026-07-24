@@ -1,6 +1,7 @@
 import datetime
 import json
 
+import pyotp
 from django.core.exceptions import ValidationError
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -19,6 +20,7 @@ from .models import (
     ContractCompletion,
     FinancialYear,
     Invoice,
+    MFABackupCode,
     Milestone,
     Payment,
     PerformanceGuarantee,
@@ -32,6 +34,7 @@ from .models import (
     StatusUpdate,
     TendersBoardReview,
     ThresholdRule,
+    TOTPDevice,
     User,
 )
 from .models import LawProfile
@@ -46,10 +49,12 @@ from .services import (
     award_solicitation,
     complete_contract,
     complete_milestone,
+    confirm_mfa_enrollment,
     confirm_requisition_funds,
     create_record_from_requisition,
     determine_default_method,
     determine_requisition_method,
+    disable_mfa,
     get_approving_authority,
     get_current_solicitation,
     get_risk_alerts,
@@ -68,13 +73,16 @@ from .services import (
     review_prequalification_applicant,
     review_requisition_packaging,
     sign_contract,
+    start_mfa_enrollment,
     submit_clarification_question,
     submit_complaint,
     submit_invoice,
     submit_plan,
     submit_requisition,
     transition_status,
+    verify_mfa_code,
 )
+from .services import MFA_MAX_FAILED_ATTEMPTS
 
 
 def make_law_profile():
@@ -3156,3 +3164,224 @@ class OCDSExportTests(TestCase):
         self.assertIn('contracts', release)
         self.assertEqual(release['contracts'][0]['awardID'], str(award.id))
         self.assertEqual(release['contracts'][0]['status'], 'active')
+
+
+class MFAServiceTests(TestCase):
+    """Authenticator-app (TOTP) second factor for staff logins — closes
+    the blueprint gap "no MFA on staff logins." Service-layer validation
+    logic; MFALoginFlowTests below covers the actual login/setup views."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='mfa_user', password='x', role=User.Role.PROCUREMENT_UNIT)
+
+    def _enable(self):
+        secret = pyotp.random_base32()
+        backup_codes = confirm_mfa_enrollment(user=self.user, secret=secret, code=pyotp.TOTP(secret).now())
+        return secret, backup_codes
+
+    def test_start_enrollment_does_not_raise_when_not_yet_enrolled(self):
+        start_mfa_enrollment(user=self.user)  # should not raise
+
+    def test_start_enrollment_raises_if_already_confirmed(self):
+        self._enable()
+        with self.assertRaises(ValidationError):
+            start_mfa_enrollment(user=self.user)
+
+    def test_start_enrollment_does_not_create_a_device_row(self):
+        # A bare enrollment check must stay side-effect-free — no row
+        # until confirm_mfa_enrollment() actually runs.
+        start_mfa_enrollment(user=self.user)
+        self.assertFalse(TOTPDevice.objects.filter(user=self.user).exists())
+
+    def test_confirm_rejects_wrong_code(self):
+        secret = pyotp.random_base32()
+        with self.assertRaises(ValidationError):
+            confirm_mfa_enrollment(user=self.user, secret=secret, code='000000')
+        self.assertFalse(TOTPDevice.objects.filter(user=self.user).exists())
+
+    def test_confirm_with_correct_code_enables_and_issues_backup_codes(self):
+        secret, backup_codes = self._enable()
+        device = TOTPDevice.objects.get(user=self.user)
+        self.assertTrue(device.confirmed)
+        self.assertIsNotNone(device.confirmed_at)
+        self.assertEqual(device.secret, secret)
+        self.assertEqual(len(backup_codes), 8)
+        self.assertEqual(MFABackupCode.objects.filter(user=self.user).count(), 8)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='user', object_id=self.user.pk, action=AuditEvent.Action.MFA_ENABLED,
+            ).exists()
+        )
+
+    def test_confirm_raises_if_already_confirmed(self):
+        self._enable()
+        with self.assertRaises(ValidationError):
+            confirm_mfa_enrollment(user=self.user, secret=pyotp.random_base32(), code='000000')
+
+    def test_verify_accepts_valid_totp_code(self):
+        secret, _ = self._enable()
+        self.assertTrue(verify_mfa_code(user=self.user, code=pyotp.TOTP(secret).now()))
+
+    def test_verify_accepts_backup_code_once_only(self):
+        _, backup_codes = self._enable()
+        self.assertTrue(verify_mfa_code(user=self.user, code=backup_codes[0]))
+        with self.assertRaises(ValidationError):
+            verify_mfa_code(user=self.user, code=backup_codes[0])
+
+    def test_verify_locks_out_after_max_failed_attempts(self):
+        secret, _ = self._enable()
+        for _ in range(MFA_MAX_FAILED_ATTEMPTS):
+            with self.assertRaises(ValidationError):
+                verify_mfa_code(user=self.user, code='000000')
+        with self.assertRaises(ValidationError) as ctx:
+            verify_mfa_code(user=self.user, code=pyotp.TOTP(secret).now())
+        self.assertIn('Too many failed attempts', str(ctx.exception))
+
+    def test_verify_rejects_the_same_code_used_twice(self):
+        # Replay protection: capturing a valid code and resubmitting it
+        # must not succeed a second time, even within its validity window.
+        secret, _ = self._enable()
+        code = pyotp.TOTP(secret).now()
+        self.assertTrue(verify_mfa_code(user=self.user, code=code))
+        with self.assertRaises(ValidationError) as ctx:
+            verify_mfa_code(user=self.user, code=code)
+        self.assertIn('already been used', str(ctx.exception))
+
+    def test_disable_removes_device_and_backup_codes(self):
+        self._enable()
+        disable_mfa(user=self.user)
+        self.assertFalse(TOTPDevice.objects.filter(user=self.user).exists())
+        self.assertFalse(MFABackupCode.objects.filter(user=self.user).exists())
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                content_type__model='user', object_id=self.user.pk, action=AuditEvent.Action.MFA_DISABLED,
+            ).exists()
+        )
+
+    def test_disable_raises_if_not_enabled(self):
+        with self.assertRaises(ValidationError):
+            disable_mfa(user=self.user)
+
+
+class MFALoginFlowTests(TestCase):
+    """The actual login/setup views, including the two-step
+    password-then-code flow via the real HTTP client (not force_login,
+    since the whole point is verifying request.user stays anonymous
+    between the two steps)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='mfa_login_user', password='correcthorse', role=User.Role.PROCUREMENT_UNIT)
+
+    def _enable_mfa(self):
+        secret = pyotp.random_base32()
+        confirm_mfa_enrollment(user=self.user, secret=secret, code=pyotp.TOTP(secret).now())
+        return TOTPDevice.objects.get(user=self.user)
+
+    def test_login_without_mfa_enabled_logs_in_directly(self):
+        response = self.client.post(reverse('staff_login'), {'username': 'mfa_login_user', 'password': 'correcthorse'})
+        self.assertEqual(response.status_code, 302)
+        self.assertNotEqual(response.url, reverse('staff_mfa_verify'))
+        response2 = self.client.get(reverse('staff_record_list'))
+        self.assertEqual(response2.status_code, 200)
+
+    def test_login_with_mfa_enabled_does_not_log_in_yet(self):
+        self._enable_mfa()
+        response = self.client.post(reverse('staff_login'), {'username': 'mfa_login_user', 'password': 'correcthorse'})
+        self.assertRedirects(response, reverse('staff_mfa_verify'))
+        # Still not authenticated — the password step alone must not grant access.
+        response2 = self.client.get(reverse('staff_record_list'))
+        self.assertEqual(response2.status_code, 302)
+        self.assertIn('/staff/login/', response2.url)
+
+    def test_mfa_verify_with_correct_code_completes_login(self):
+        device = self._enable_mfa()
+        self.client.post(reverse('staff_login'), {'username': 'mfa_login_user', 'password': 'correcthorse'})
+        response = self.client.post(reverse('staff_mfa_verify'), {'code': pyotp.TOTP(device.secret).now()}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        response2 = self.client.get(reverse('staff_record_list'))
+        self.assertEqual(response2.status_code, 200)
+
+    def test_mfa_verify_with_wrong_code_stays_logged_out(self):
+        self._enable_mfa()
+        self.client.post(reverse('staff_login'), {'username': 'mfa_login_user', 'password': 'correcthorse'})
+        response = self.client.post(reverse('staff_mfa_verify'), {'code': '000000'})
+        self.assertEqual(response.status_code, 200)
+        response2 = self.client.get(reverse('staff_record_list'))
+        self.assertEqual(response2.status_code, 302)
+
+    def test_relogging_in_resets_lockout(self):
+        # A locked-out device must not be a permanent dead end — a fresh
+        # correct password submission re-opens the door (the actual rate
+        # limit is coupling code-guessing to a correct password guess).
+        device = self._enable_mfa()
+        self.client.post(reverse('staff_login'), {'username': 'mfa_login_user', 'password': 'correcthorse'})
+        for _ in range(MFA_MAX_FAILED_ATTEMPTS):
+            self.client.post(reverse('staff_mfa_verify'), {'code': '000000'})
+        device.refresh_from_db()
+        self.assertGreaterEqual(device.failed_attempts, MFA_MAX_FAILED_ATTEMPTS)
+
+        self.client.post(reverse('staff_login'), {'username': 'mfa_login_user', 'password': 'correcthorse'})
+        device.refresh_from_db()
+        self.assertEqual(device.failed_attempts, 0)
+        response = self.client.post(reverse('staff_mfa_verify'), {'code': pyotp.TOTP(device.secret).now()}, follow=True)
+        response2 = self.client.get(reverse('staff_record_list'))
+        self.assertEqual(response2.status_code, 200)
+
+    def test_mfa_verify_without_pending_session_redirects_to_login(self):
+        response = self.client.get(reverse('staff_mfa_verify'))
+        self.assertRedirects(response, reverse('staff_login'))
+
+    def test_mfa_setup_requires_login(self):
+        response = self.client.get(reverse('staff_mfa_setup'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/staff/login/', response.url)
+
+    def test_mfa_setup_shows_qr_and_secret_when_not_enabled(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('staff_mfa_setup'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<svg')
+        # No device row yet — the secret is staged in the session only,
+        # not written to the database by a bare GET (see
+        # services.start_mfa_enrollment's docstring).
+        self.assertFalse(TOTPDevice.objects.filter(user=self.user).exists())
+        secret = self.client.session['mfa_pending_secret']
+        self.assertContains(response, secret)
+
+    def test_mfa_setup_get_does_not_write_a_device_row(self):
+        self.client.force_login(self.user)
+        self.client.get(reverse('staff_mfa_setup'))
+        self.client.get(reverse('staff_mfa_setup'))
+        self.client.get(reverse('staff_mfa_setup'))
+        self.assertFalse(TOTPDevice.objects.filter(user=self.user).exists())
+
+    def test_mfa_setup_post_correct_code_enables_and_shows_backup_codes(self):
+        self.client.force_login(self.user)
+        self.client.get(reverse('staff_mfa_setup'))
+        secret = self.client.session['mfa_pending_secret']
+        response = self.client.post(reverse('staff_mfa_setup'), {'code': pyotp.TOTP(secret).now()})
+        self.assertEqual(response.status_code, 200)
+        device = TOTPDevice.objects.get(user=self.user)
+        self.assertTrue(device.confirmed)
+        self.assertEqual(device.secret, secret)
+        self.assertEqual(MFABackupCode.objects.filter(user=self.user).count(), 8)
+
+    def test_mfa_setup_already_enabled_shows_disable_form(self):
+        self.client.force_login(self.user)
+        self._enable_mfa()
+        response = self.client.get(reverse('staff_mfa_setup'))
+        self.assertContains(response, 'enabled')
+        self.assertContains(response, 'Disable MFA')
+
+    def test_mfa_disable_with_correct_code_disables(self):
+        self.client.force_login(self.user)
+        device = self._enable_mfa()
+        response = self.client.post(reverse('staff_mfa_disable'), {'code': pyotp.TOTP(device.secret).now()}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(TOTPDevice.objects.filter(user=self.user).exists())
+
+    def test_mfa_disable_with_wrong_code_does_not_disable(self):
+        self.client.force_login(self.user)
+        self._enable_mfa()
+        self.client.post(reverse('staff_mfa_disable'), {'code': '000000'})
+        self.assertTrue(TOTPDevice.objects.filter(user=self.user, confirmed=True).exists())

@@ -1,7 +1,12 @@
 import csv
+import io
 
+import pyotp
+import qrcode
+import qrcode.image.svg
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
@@ -29,6 +34,7 @@ from .forms import (
     InvoiceReviewForm,
     LocalizedAuthenticationForm,
     MethodDeterminationForm,
+    MFAVerifyForm,
     MilestoneCompleteForm,
     MilestoneForm,
     PackagingReviewForm,
@@ -63,10 +69,12 @@ from .services import (
     award_solicitation,
     complete_contract,
     complete_milestone,
+    confirm_mfa_enrollment,
     confirm_requisition_funds,
     create_record_from_requisition,
     decline_requisition_funds,
     determine_requisition_method,
+    disable_mfa,
     find_similar_requisitions,
     get_current_solicitation,
     get_published_advertisement,
@@ -86,12 +94,15 @@ from .services import (
     review_prequalification_applicant,
     review_requisition_packaging,
     sign_contract,
+    start_mfa_enrollment,
     submit_clarification_question,
     submit_complaint,
     submit_invoice,
     submit_plan,
     submit_requisition,
+    totp_provisioning_uri,
     transition_status,
+    verify_mfa_code,
 )
 
 
@@ -103,6 +114,125 @@ class StaffLoginView(auth_views.LoginView):
         kwargs = super().get_form_kwargs()
         kwargs['lang'] = self.request.session.get('lang', DEFAULT_LANG)
         return kwargs
+
+    def form_valid(self, form):
+        # Password checked out, but don't call login() yet if this
+        # account has MFA enabled — request.user stays AnonymousUser
+        # until the code is verified too, same as Django's own documented
+        # two-step auth pattern (a session var alone never authenticates
+        # a request; only calling login() does).
+        user = form.get_user()
+        device = getattr(user, 'totp_device', None)
+        if device and device.confirmed:
+            # A correct password just re-opens the door on a locked-out
+            # device — see verify_mfa_code's docstring: the rate limit is
+            # coupling code-guessing to the cost of a correct password
+            # guess, which only holds if this reset actually happens here.
+            if device.failed_attempts:
+                device.failed_attempts = 0
+                device.save(update_fields=['failed_attempts'])
+            self.request.session['mfa_pending_user_id'] = str(user.pk)
+            self.request.session['mfa_pending_next'] = self.get_redirect_url() or ''
+            return redirect('staff_mfa_verify')
+        return super().form_valid(form)
+
+
+def staff_mfa_verify(request):
+    """Reached only mid-login, after a correct password but before
+    login() has run — see StaffLoginView.form_valid. Not @login_required
+    since the user isn't authenticated yet at this point."""
+    user_id = request.session.get('mfa_pending_user_id')
+    if not user_id:
+        return redirect('staff_login')
+    user = get_object_or_404(User, pk=user_id)
+    error = None
+    if request.method == 'POST':
+        form = MFAVerifyForm(request.POST)
+        if form.is_valid():
+            try:
+                verify_mfa_code(user=user, code=form.cleaned_data['code'])
+                login(request, user)
+                del request.session['mfa_pending_user_id']
+                next_url = request.session.pop('mfa_pending_next', '') or 'staff_record_list'
+                return redirect(next_url)
+            except ValidationError as exc:
+                error = exc.message
+                if 'Too many failed attempts' in error:
+                    del request.session['mfa_pending_user_id']
+                    request.session.pop('mfa_pending_next', None)
+                    return render(request, 'staff/mfa_verify.html', {'form': form, 'error': error, 'locked_out': True})
+        else:
+            error = 'Enter the 6-digit code from your authenticator app, or an 8-character backup code.'
+    else:
+        form = MFAVerifyForm()
+    return render(request, 'staff/mfa_verify.html', {'form': form, 'error': error})
+
+
+def _qr_svg(data):
+    img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage, box_size=8)
+    buf = io.BytesIO()
+    img.save(buf)
+    return buf.getvalue().decode('utf-8')
+
+
+@login_required
+def staff_mfa_setup(request):
+    existing = getattr(request.user, 'totp_device', None)
+    if existing and existing.confirmed:
+        return render(request, 'staff/mfa_setup.html', {'already_enabled': True})
+    start_mfa_enrollment(user=request.user)
+
+    # Staged in the session, not the database, until confirmed — see
+    # services.start_mfa_enrollment's docstring for why a bare GET must
+    # never persist a pending device row.
+    secret = request.session.get('mfa_pending_secret')
+    if not secret:
+        secret = pyotp.random_base32()
+        request.session['mfa_pending_secret'] = secret
+
+    backup_codes = None
+    error = None
+    if request.method == 'POST':
+        form = MFAVerifyForm(request.POST)
+        if form.is_valid():
+            try:
+                backup_codes = confirm_mfa_enrollment(user=request.user, secret=secret, code=form.cleaned_data['code'])
+                del request.session['mfa_pending_secret']
+            except ValidationError as exc:
+                error = exc.message
+        else:
+            error = 'Enter the 6-digit code from your authenticator app.'
+    else:
+        form = MFAVerifyForm()
+
+    context = {
+        'already_enabled': False, 'form': form, 'error': error, 'backup_codes': backup_codes, 'secret': secret,
+    }
+    if not backup_codes:
+        # The provisioning URI embeds only the locally-generated random
+        # secret plus the username/issuer name — never anything supplied
+        # in this request — so the resulting SVG (a grid of QR modules
+        # rendered as <path> geometry, not literal text nodes) is safe to
+        # mark_safe: nothing user-controlled can reach the markup itself.
+        uri = totp_provisioning_uri(secret=secret, username=request.user.username)
+        context['qr_svg'] = _qr_svg(uri)
+    return render(request, 'staff/mfa_setup.html', context)
+
+
+@login_required
+def staff_mfa_disable(request):
+    if request.method == 'POST':
+        form = MFAVerifyForm(request.POST)
+        if form.is_valid():
+            try:
+                verify_mfa_code(user=request.user, code=form.cleaned_data['code'])
+                disable_mfa(user=request.user)
+                messages.success(request, 'MFA has been disabled for your account.')
+            except ValidationError as exc:
+                messages.error(request, exc.message)
+        else:
+            messages.error(request, 'Enter a valid code to confirm disabling MFA.')
+    return redirect('staff_mfa_setup')
 
 
 def set_lang(request, lang_code):

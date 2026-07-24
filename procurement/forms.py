@@ -25,6 +25,13 @@ class LocalizedAuthenticationForm(AuthenticationForm):
             )
 
 
+class MFAVerifyForm(forms.Form):
+    code = forms.CharField(
+        max_length=10, required=True, label='Authentication code',
+        help_text='6-digit code from your authenticator app, or an 8-character backup code.',
+    )
+
+
 class ProcurementRecordForm(forms.ModelForm):
     class Meta:
         model = ProcurementRecord

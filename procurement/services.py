@@ -1,5 +1,9 @@
 import datetime
+import secrets
 
+import pyotp
+from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models as django_models
@@ -17,6 +21,7 @@ from .models import (
     Contract,
     ContractCompletion,
     Invoice,
+    MFABackupCode,
     Milestone,
     Payment,
     PerformanceGuarantee,
@@ -30,6 +35,7 @@ from .models import (
     StatusUpdate,
     TendersBoardReview,
     ThresholdRule,
+    TOTPDevice,
 )
 
 
@@ -970,3 +976,130 @@ def get_risk_alerts():
         'vendor_repeat_complaints': _vendor_repeat_complaints(),
         'overdue_complaints': overdue_complaints,
     }
+
+
+# --- MFA (authenticator-app TOTP) — closes the blueprint gap "no MFA on
+# staff logins," opt-in per user for this slice (see TOTPDevice's own
+# docstring for why). Enrollment is two-step (start -> confirm) so a
+# device only ever becomes the account's active second factor once the
+# user has proven they can actually generate a matching code from it —
+# otherwise a botched scan could silently lock someone out. Login-time
+# verification and account disablement funnel through the same
+# verify_mfa_code() so both enforce the same failed-attempt lockout. ---
+
+MFA_MAX_FAILED_ATTEMPTS = 5
+MFA_BACKUP_CODE_COUNT = 8
+
+
+def start_mfa_enrollment(*, user):
+    """Guard only — no database write. The pending secret is staged in
+    the caller's session (see views.staff_mfa_setup), not persisted,
+    until confirm_mfa_enrollment() proves the user can actually generate
+    a matching code from it. A GET request must stay side-effect-free;
+    creating a TOTPDevice row here (the original design) meant simply
+    *viewing* the setup page wrote to the database every time — and,
+    worse, re-viewing it right after disabling MFA silently created a
+    fresh unconfirmed device each time, since "no confirmed device
+    exists" looked identical to "never enrolled"."""
+    device = getattr(user, 'totp_device', None)
+    if device and device.confirmed:
+        raise ValidationError('MFA is already enabled for this account.')
+
+
+def totp_provisioning_uri(*, secret, username):
+    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=settings.TENANT_NAME)
+
+
+def _generate_backup_codes(user):
+    user.mfa_backup_codes.all().delete()
+    codes = [secrets.token_hex(4) for _ in range(MFA_BACKUP_CODE_COUNT)]
+    MFABackupCode.objects.bulk_create([MFABackupCode(user=user, code_hash=make_password(code)) for code in codes])
+    return codes
+
+
+def confirm_mfa_enrollment(*, user, secret, code):
+    """The only place a TOTPDevice row is actually written — the secret
+    only reaches the database once the caller has proven (by supplying a
+    matching code) that it was actually scanned/entered correctly."""
+    existing = getattr(user, 'totp_device', None)
+    if existing and existing.confirmed:
+        raise ValidationError('MFA is already enabled for this account.')
+    if not pyotp.TOTP(secret).verify(code, valid_window=1):
+        raise ValidationError('That code did not match — check your authenticator app and try again.')
+    with transaction.atomic():
+        device, _ = TOTPDevice.objects.update_or_create(
+            user=user,
+            defaults={'secret': secret, 'confirmed': True, 'confirmed_at': timezone.now(), 'failed_attempts': 0},
+        )
+        backup_codes = _generate_backup_codes(user)
+        log_audit_event(target=user, action=AuditEvent.Action.MFA_ENABLED, actor=user)
+    return backup_codes  # plaintext, shown to the caller exactly once — never persisted
+
+
+def disable_mfa(*, user):
+    device = getattr(user, 'totp_device', None)
+    if device is None:
+        raise ValidationError('MFA is not enabled for this account.')
+    with transaction.atomic():
+        log_audit_event(target=user, action=AuditEvent.Action.MFA_DISABLED, actor=user)
+        device.delete()
+        user.mfa_backup_codes.all().delete()
+
+
+def _totp_matched_step(totp, code):
+    """pyotp's own .verify() only reports whether some offset in the
+    window matched, not which one — needed here to reject replay of an
+    already-consumed code (see TOTPDevice.last_used_step). Checks the
+    same +/-1 step window as verify_mfa_code's valid_window=1, using
+    pyotp's own constant-time string comparison."""
+    now = timezone.now()
+    for offset in (-1, 0, 1):
+        if pyotp.utils.strings_equal(totp.at(now, offset), code):
+            return int(now.timestamp() // totp.interval) + offset
+    return None
+
+
+def verify_mfa_code(*, user, code):
+    """Used both at login time and to confirm disabling MFA.
+
+    Locks out after MFA_MAX_FAILED_ATTEMPTS wrong codes in a row.
+    failed_attempts is reset on every fresh password-verified login
+    attempt (see StaffLoginView.form_valid), not here on success only —
+    that reset is what actually re-opens the door after a lockout; this
+    function alone can only ever count failures up, never down past a
+    lockout, by design (a script that already has this far, i.e. already
+    knows a valid password, still can't grind past 5 guesses without
+    re-solving the password step each time)."""
+    device = getattr(user, 'totp_device', None)
+    if device is None or not device.confirmed:
+        raise ValidationError('MFA is not enabled for this account.')
+    if device.failed_attempts >= MFA_MAX_FAILED_ATTEMPTS:
+        raise ValidationError('Too many failed attempts — please log in again.')
+
+    totp = pyotp.TOTP(device.secret)
+    matched_step = _totp_matched_step(totp, code)
+    if matched_step is not None:
+        if device.last_used_step is not None and matched_step <= device.last_used_step:
+            device.failed_attempts += 1
+            device.save(update_fields=['failed_attempts'])
+            raise ValidationError('This code has already been used — wait for the next one.')
+        device.failed_attempts = 0
+        device.last_used_step = matched_step
+        device.save(update_fields=['failed_attempts', 'last_used_step'])
+        return True
+
+    for candidate in user.mfa_backup_codes.filter(used_at__isnull=True):
+        if check_password(code, candidate.code_hash):
+            # Atomic conditional update, not a separate check-then-save —
+            # closes the race where two concurrent requests both pass the
+            # used_at__isnull=True check for the same still-unused code.
+            claimed = MFABackupCode.objects.filter(pk=candidate.pk, used_at__isnull=True).update(used_at=timezone.now())
+            if not claimed:
+                break  # another request claimed it first — fall through to the failure path
+            device.failed_attempts = 0
+            device.save(update_fields=['failed_attempts'])
+            return True
+
+    device.failed_attempts += 1
+    device.save(update_fields=['failed_attempts'])
+    raise ValidationError('Invalid code.')

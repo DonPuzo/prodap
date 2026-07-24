@@ -20,6 +20,9 @@ urlpatterns = [
     # Procurement office backend — login required.
     path('staff/login/', views.StaffLoginView.as_view(), name='staff_login'),
     path('staff/logout/', auth_views.LogoutView.as_view(), name='staff_logout'),
+    path('staff/mfa/verify/', views.staff_mfa_verify, name='staff_mfa_verify'),
+    path('staff/mfa/setup/', views.staff_mfa_setup, name='staff_mfa_setup'),
+    path('staff/mfa/disable/', views.staff_mfa_disable, name='staff_mfa_disable'),
     path('staff/records/', views.staff_record_list, name='staff_record_list'),
     path('staff/records/<uuid:pk>/edit/', views.staff_record_edit, name='staff_record_edit'),
     path('staff/records/<uuid:pk>/transition/', views.staff_status_transition, name='staff_status_transition'),

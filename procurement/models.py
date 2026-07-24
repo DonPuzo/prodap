@@ -493,6 +493,8 @@ class AuditEvent(models.Model):
         PAYMENT_RECORDED = 'payment_recorded', 'Payment Recorded'
         TENDERS_BOARD_REVIEWED = 'tenders_board_reviewed', 'Tenders Board Reviewed'
         RECORD_ABANDONED = 'record_abandoned', 'Record Abandoned'
+        MFA_ENABLED = 'mfa_enabled', 'MFA Enabled'
+        MFA_DISABLED = 'mfa_disabled', 'MFA Disabled'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -1142,3 +1144,64 @@ class Abandonment(models.Model):
 
     def __str__(self):
         return f'Abandonment of {self.record.title} ({self.get_reason_display()})'
+
+
+class TOTPDevice(models.Model):
+    """A staff member's authenticator-app-based second login factor
+    (closes the blueprint gap "no MFA on staff logins"). Opt-in per user
+    for this slice — forcing MFA on every already-seeded demo account
+    immediately would lock them out with no enrollment path; see
+    services.py for the enrollment/verification flow.
+
+    `secret` is the raw base32 TOTP secret. Unlike a password hash this
+    is inherently symmetric/reversible — the server must be able to
+    compute the current 30-second code to verify a login — so, unlike
+    every other secret in this app, it sits in the database in
+    plaintext, the same posture as most self-hosted TOTP implementations
+    without a dedicated encryption-at-rest layer. Flagged here rather
+    than silently assumed safe: a hardened deployment would add
+    field-level encryption for this column specifically.
+
+    CASCADE (not PROTECT, unlike almost every other FK in this app) —
+    this is user-owned account configuration, not an audit/evidence
+    record; deleting a user should take their MFA device with it."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='totp_device')
+    secret = models.CharField(max_length=32)
+    confirmed = models.BooleanField(default=False)
+    failed_attempts = models.PositiveSmallIntegerField(
+        default=0,
+        help_text=(
+            'Reset to 0 on every fresh password-verified login attempt (see '
+            'StaffLoginView.form_valid) — the actual rate limit is coupling code-guessing '
+            'to the cost of a correct password guess, not a permanent ban.'
+        ),
+    )
+    last_used_step = models.BigIntegerField(
+        null=True, blank=True,
+        help_text='RFC 6238 time-step of the last successfully-verified TOTP code — rejects replay of the same code.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f'TOTP device for {self.user.username} ({"confirmed" if self.confirmed else "pending"})'
+
+
+class MFABackupCode(models.Model):
+    """One-time recovery codes issued alongside a confirmed TOTPDevice,
+    so a lost/reset authenticator app doesn't permanently lock a staff
+    member out. Stored hashed via django.contrib.auth.hashers, the same
+    as a password — these are bearer secrets, unlike the TOTP secret
+    itself the server never needs to recover the plaintext, only compare
+    against it once at use time."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='mfa_backup_codes')
+    code_hash = models.CharField(max_length=255)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Backup code for {self.user.username} ({"used" if self.used_at else "unused"})'
