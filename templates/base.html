@@ -45,6 +45,7 @@
   </div>
   {% if user.is_authenticated %}
   <div class="a11y-bar staff-nav" aria-label="Staff navigation">
+    <a href="{% url 'staff_dashboard' %}">Command Centre</a>
     <a href="{% url 'staff_record_list' %}">Records</a>
     <a href="{% url 'staff_plan_list' %}">Annual Plans</a>
     <a href="{% url 'staff_requisition_list' %}">Requisitions</a>

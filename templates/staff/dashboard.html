@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Command Centre — {{ tenant_name }}{% endblock %}
+{% block content %}
+
+<div class="page-nav">
+  <span>{{ tenant_name }} procurement workspace</span>
+</div>
+<h2 class="command-heading">Command Centre</h2>
+
+<div class="aligned-callout">
+  <div class="eyebrow">PPA 2007 aligned</div>
+  <h4>Evidence before status</h4>
+  <p>Every status change on this platform requires a completed evidence gate — see the Audit Trail below.</p>
+</div>
+
+<div class="hero-banner">
+  <div>
+    <div class="eyebrow">{% now "l, j F Y" %}</div>
+    <h2>Good day, {{ user.get_full_name|default:user.username }}.</h2>
+    <p>
+      {{ active_count }} active procurement process{{ active_count|pluralize:"es" }} moving through controlled legal
+      gates.
+      {% if alert_total %}{{ alert_total }} risk alert{{ alert_total|pluralize }} may need review.{% else %}No open risk alerts right now.{% endif %}
+    </p>
+  </div>
+  <div class="fy-badge">
+    <div class="fy-year">{{ tenant_name }}</div>
+    <div class="fy-note">Live procurement register</div>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="value">{{ active_count }}</div>
+    <div class="label">Active processes · across {{ units_count }} unit{{ units_count|pluralize }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">₦{{ active_value|floatformat:0|intcomma }}</div>
+    <div class="label">Active portfolio value</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">{{ bids_recorded_count }}</div>
+    <div class="label">Bids recorded</div>
+  </div>
+  <div class="stat-card">
+    <div class="value">{{ alert_total }}</div>
+    <div class="label">Risk &amp; compliance alerts</div>
+  </div>
+</div>
+
+<div class="dashboard-grid">
+  <div>
+    <div class="panel">
+      <h3>Active procurement processes</h3>
+      <p class="panel-subtitle">Status follows completed evidence gates</p>
+      {% if process_rows %}
+      <table class="record-list">
+        <thead><tr><th>Procurement</th><th>Stage</th><th>Value</th><th>Progress</th></tr></thead>
+        <tbody>
+          {% for row in process_rows %}
+          <tr>
+            <td data-label="Procurement">
+              <a class="title-link" href="{% url 'staff_record_detail' row.record.id %}">{{ row.record.title }}</a><br>
+              <span style="color: var(--muted); font-size: .85em;">{{ row.record.department }}</span>
+            </td>
+            <td data-label="Stage"><span class="badge badge-{{ row.record.status|lower }}">{{ row.record.status }}</span></td>
+            <td data-label="Value">₦{{ row.record.display_cost|floatformat:0|intcomma }}</td>
+            <td data-label="Progress">
+              <div class="progress-track"><div class="progress-fill" style="width: {{ row.progress }}%;"></div></div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="panel-empty">No active procurement processes right now.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h3>Risk radar</h3>
+      <p class="panel-subtitle">Evidence-based alerts</p>
+      {% if risk_items %}
+        {% for item in risk_items %}
+        <div class="panel-item">
+          <span class="dot dot-{{ item.severity }}"></span>
+          <div>
+            <div class="panel-item-title">{{ item.title }}</div>
+            <div class="panel-item-desc">{{ item.description }}</div>
+            {% if item.record %}
+            <div class="panel-item-meta"><a href="{% url 'staff_record_detail' item.record.id %}">View record →</a></div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="panel-empty">No risk alerts at this time.</p>
+      {% endif %}
+      <p style="margin-top: var(--space-3);"><a href="{% url 'staff_analytics' %}">Full analytics →</a></p>
+    </div>
+
+    <div class="panel">
+      <h3>Recent audit events</h3>
+      <p class="panel-subtitle">Immutable activity record</p>
+      {% if recent_events %}
+        {% for event in recent_events %}
+        <div class="panel-item">
+          <span class="dot dot-low"></span>
+          <div>
+            <div class="panel-item-title">{{ event.get_action_display }}</div>
+            <div class="panel-item-desc">{{ event.actor.username }}</div>
+            <div class="panel-item-meta">{{ event.created_at|date:"n/j/Y, g:i A" }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="panel-empty">No audit events yet.</p>
+      {% endif %}
+      <p style="margin-top: var(--space-3);"><a href="{% url 'admin:procurement_auditevent_changelist' %}">Full audit trail →</a></p>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

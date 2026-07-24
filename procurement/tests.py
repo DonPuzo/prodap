@@ -3385,3 +3385,61 @@ class MFALoginFlowTests(TestCase):
         self._enable_mfa()
         self.client.post(reverse('staff_mfa_disable'), {'code': '000000'})
         self.assertTrue(TOTPDevice.objects.filter(user=self.user, confirmed=True).exists())
+
+
+class StaffDashboardTests(TestCase):
+    """Command Centre — a summary landing page reusing existing signals
+    (active records, risk alerts, audit trail). Visual-language pilot;
+    pure read/aggregation, same access model as staff_analytics."""
+
+    def setUp(self):
+        self.law_profile = make_law_profile()
+        self.staff = User.objects.create_user(username='dash_staff', password='x', role=User.Role.PROCUREMENT_UNIT)
+
+    def test_requires_login(self):
+        response = self.client.get(reverse('staff_dashboard'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/staff/login/', response.url)
+
+    def test_accessible_to_any_authenticated_staff(self):
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_dashboard'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_active_record_appears_in_process_table(self):
+        record = make_record(self.law_profile, self.staff, status=ProcurementRecord.Status.ADVERTISED)
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_dashboard'))
+        self.assertContains(response, record.title)
+        self.assertContains(response, 'Advertised')
+
+    def test_planning_record_excluded_from_active_count(self):
+        make_record(self.law_profile, self.staff, status=ProcurementRecord.Status.PLANNING)
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_dashboard'))
+        self.assertContains(response, '<div class="value">0</div>')  # zero active processes
+
+    def test_risk_alert_appears_in_radar(self):
+        record = make_record(
+            self.law_profile, self.staff, department='Bursary', procurement_method='Open Competitive Bidding',
+            awarded_cost=100_000,
+        )
+        for i in range(3):
+            make_record(
+                self.law_profile, self.staff, department='Bursary', procurement_method='Open Competitive Bidding',
+                awarded_cost=20_000,
+            )
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_dashboard'))
+        self.assertContains(response, 'Possible cost outlier')
+        self.assertContains(response, record.title)
+
+    def test_recent_audit_event_appears(self):
+        approver = User.objects.create_user(username='dash_ao', password='x', role=User.Role.ACCOUNTING_OFFICER)
+        plan = ProcurementPlan.objects.create(
+            law_profile=self.law_profile, financial_year=make_financial_year(self.law_profile), prepared_by=self.staff,
+        )
+        approve_plan(plan=plan, actor=approver)
+        self.client.force_login(self.staff)
+        response = self.client.get(reverse('staff_dashboard'))
+        self.assertContains(response, 'Plan Approved')

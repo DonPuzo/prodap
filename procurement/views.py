@@ -54,9 +54,9 @@ from .forms import (
 )
 from .i18n import STRINGS, DEFAULT_LANG, get_strings
 from .models import (
-    Abandonment, Award, Bid, Clarification, Complaint, Contract, ContractCompletion, Invoice, Milestone, Payment,
-    PerformanceGuarantee, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord, RecordFlag,
-    Requisition, Solicitation, TendersBoardReview, User,
+    Abandonment, Award, AuditEvent, Bid, Clarification, Complaint, Contract, ContractCompletion, Invoice, Milestone,
+    Payment, PerformanceGuarantee, PlanLine, PrequalificationApplicant, ProcurementPlan, ProcurementRecord,
+    RecordFlag, Requisition, Solicitation, TendersBoardReview, User,
 )
 from .permissions import role_required
 from .services import (
@@ -649,6 +649,86 @@ def export_ocds(request):
 
 
 # --- Procurement office backend (login required) ---
+
+# Simple, explainable display heuristic for the dashboard's progress bars —
+# not a real project-management percent-complete calculation, just a rough
+# "how far along the statutory sequence is this" visual cue.
+STATUS_PROGRESS = {
+    ProcurementRecord.Status.PLANNING: 10,
+    ProcurementRecord.Status.ADVERTISED: 30,
+    ProcurementRecord.Status.TENDERING: 45,
+    ProcurementRecord.Status.AWARDED: 60,
+    ProcurementRecord.Status.IMPLEMENTATION: 80,
+    ProcurementRecord.Status.COMPLETED: 100,
+    ProcurementRecord.Status.ABANDONED: 0,
+}
+
+
+def _risk_radar_items(risk_alerts, limit=5):
+    """Flattens get_risk_alerts()'s categories into one severity-ranked
+    list for the dashboard's Risk radar panel — presentation-only
+    reshaping, no new logic (see services.get_risk_alerts)."""
+    items = []
+    for o in risk_alerts['cost_outliers']:
+        items.append({
+            'severity': 'high', 'title': 'Possible cost outlier',
+            'description': f"{o['record'].title} is {o['ratio']:.2f}x the department+method median cost.",
+            'record': o['record'],
+        })
+    for o in risk_alerts['cycle_outliers']:
+        items.append({
+            'severity': 'medium', 'title': 'Cycle-time outlier',
+            'description': f"{o['record'].title} took {o['days']} days — {o['ratio']:.2f}x the median.",
+            'record': o['record'],
+        })
+    for v in risk_alerts['vendor_repeat_complaints']:
+        items.append({
+            'severity': 'medium', 'title': 'Vendor with repeated complaints',
+            'description': f"{v['vendor_name']} — {v['count']} complaints across {len(v['records'])} record(s).",
+            'record': v['records'][0] if v['records'] else None,
+        })
+    for c in risk_alerts['overdue_complaints']:
+        items.append({
+            'severity': 'low', 'title': 'Overdue complaint',
+            'description': f"A complaint on {c.record.title} is past the target response window.",
+            'record': c.record,
+        })
+    return items[:limit]
+
+
+@login_required
+def staff_dashboard(request):
+    """Command centre — a summary landing page pulling together signals
+    that already exist elsewhere in the app (active records, risk
+    alerts, audit trail) into one view. Pilot for a new staff-facing
+    visual language; other staff pages keep their current look until
+    this direction is confirmed."""
+    active_records = ProcurementRecord.objects.filter(status__in=ACTIVE_STATUSES).select_related('law_profile')
+    active_count = active_records.count()
+    active_value = sum((r.display_cost or 0) for r in active_records)
+    units_count = active_records.values('department').distinct().count()
+
+    risk_alerts = get_risk_alerts()
+    alert_total = sum(len(v) for v in risk_alerts.values())
+
+    recent_events = AuditEvent.objects.select_related('actor').order_by('-created_at')[:6]
+
+    process_rows = [
+        {'record': r, 'progress': STATUS_PROGRESS.get(r.status, 0)}
+        for r in active_records.order_by('-created_at')[:8]
+    ]
+
+    return render(request, 'staff/dashboard.html', {
+        'process_rows': process_rows,
+        'active_count': active_count,
+        'active_value': active_value,
+        'units_count': units_count,
+        'bids_recorded_count': Bid.objects.count(),
+        'alert_total': alert_total,
+        'risk_items': _risk_radar_items(risk_alerts),
+        'recent_events': recent_events,
+    })
+
 
 @login_required
 def staff_record_list(request):
